@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Wavy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ddbe341638fe3e5cf60284d8a5e8195341d544e5")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1f7c98572be37fb0298b0e0f4f825981ec81f572")]
 [assembly: System.Reflection.AssemblyProductAttribute("Wavy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Wavy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
