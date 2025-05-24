@@ -42,7 +42,7 @@ namespace Servidor
 
         static MongoHelper()
         {
-            var client = new MongoClient("mongodb+srv://goncalo:Goncalo2004@goncalo.dlg4dxy.mongodb.net/");
+            var client = new MongoClient("localhost:27017");
             var database = client.GetDatabase("sd");
             collection = database.GetCollection<Modelo>("dados");
         }
