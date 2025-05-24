@@ -1,0 +1,19 @@
+[
+  {
+    "Name": "Novo Perfil",
+    "Projects": [
+      {
+        "Path": "Server\\Server.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Agregador\\Agregador.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Trabalho1\\Wavy.csproj",
+        "Action": "Start"
+      }
+    ]
+  }
+]
