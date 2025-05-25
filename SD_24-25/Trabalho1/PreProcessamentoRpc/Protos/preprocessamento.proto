@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option csharp_namespace = "PreProcessamentoRpc";
+
+package preprocessamento;
+
+service PreProcessamento {
+  rpc ProcessarDados (DadosBrutos) returns (DadosProcessados);
+}
+
+message DadosBrutos {
+  string dados = 1;
+  string tipo_processamento = 2;
+}
+
+message DadosProcessados {
+  string dados = 1;
+}

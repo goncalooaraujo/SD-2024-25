@@ -3,11 +3,19 @@
     "Name": "Novo Perfil",
     "Projects": [
       {
-        "Path": "Server\\Server.csproj",
+        "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "AnaliseRpc\\AnaliseRpc.csproj",
         "Action": "Start"
       },
       {
         "Path": "Agregador\\Agregador.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Server\\Server.csproj",
         "Action": "Start"
       },
       {

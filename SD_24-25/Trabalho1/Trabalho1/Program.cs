@@ -34,12 +34,22 @@ namespace Wavy
 
             try
             {
+                Console.WriteLine($"[{wavyId}] Tentando conectar ao agregador {serverIp}:{port}...");
                 TcpClient client = new TcpClient(serverIp, port);
+                Console.WriteLine($"[{wavyId}] Conexão estabelecida");
+
                 NetworkStream stream = client.GetStream();
 
                 string startMessage = "HELLO:" + wavyId;
-                stream.Write(Encoding.ASCII.GetBytes(startMessage));
-                Console.WriteLine($"[{wavyId}] Conectado ao AGREGADOR");
+                byte[] startData = Encoding.ASCII.GetBytes(startMessage);
+                Console.WriteLine($"[{wavyId}] Enviando mensagem HELLO: {startMessage}");
+                stream.Write(startData, 0, startData.Length);
+
+                // Ler resposta do HELLO
+                byte[] helloBuffer = new byte[256];
+                int helloBytes = stream.Read(helloBuffer, 0, helloBuffer.Length);
+                string helloResponse = Encoding.ASCII.GetString(helloBuffer, 0, helloBytes);
+                Console.WriteLine($"[{wavyId}] Resposta ao HELLO: {helloResponse}");
 
                 for (int i = 0; i < 10; i++)
                 {
@@ -49,6 +59,7 @@ namespace Wavy
 
                     string message = $"WAVY_ID:{wavyId}|TIPO:{tipo}|CARAC:{carac}|HORA:{hora}";
                     byte[] data = Encoding.ASCII.GetBytes(message);
+                    Console.WriteLine($"[{wavyId}] Enviando mensagem {i + 1}: {message}");
                     stream.Write(data, 0, data.Length);
 
                     byte[] buffer = new byte[256];
@@ -60,6 +71,7 @@ namespace Wavy
                 }
 
                 string endMessage = ":" + wavyId;
+                Console.WriteLine($"[{wavyId}] Enviando mensagem de término: {endMessage}");
                 stream.Write(Encoding.ASCII.GetBytes(endMessage));
                 client.Close();
 

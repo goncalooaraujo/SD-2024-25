@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+option csharp_namespace = "AnaliseRpc";
+
+package analise;
+
+service Analise {
+  rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise);
+}
+
+message DadosParaAnalise {
+  string wavy_id = 1;
+  string tipo = 2;
+  string data_inicio = 3;
+  string data_fim = 4;
+}
+
+message ResultadoAnalise {
+  double media = 1;
+  int32 total_amostras = 2;
+  string resumo = 3;
+}
