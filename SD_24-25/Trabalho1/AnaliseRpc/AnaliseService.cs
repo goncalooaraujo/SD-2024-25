@@ -5,39 +5,53 @@ namespace AnaliseRpc
 {
     public class AnaliseService : Analise.AnaliseBase
     {
-        public override Task<ResultadoAnalise> AnalisarDados(DadosParaAnalise request, ServerCallContext context)
+        public override Task<ResultadoAnalisePorTipo> AnalisarDadosPorTipo(DadosParaAnalise request, ServerCallContext context)
         {
             var client = new MongoClient("mongodb://localhost:27017");
             var database = client.GetDatabase("sd");
             var collection = database.GetCollection<Modelo>("dados");
 
+            // Pega todos os documentos para o WavyId (ignorar filtro tipo para agrupar depois)
             var filter = Builders<Modelo>.Filter.Eq(x => x.WavyId, request.WavyId);
             var dados = collection.Find(filter).ToList();
 
-            double soma = 0;
-            int contador = 0;
+            // Dicionário para armazenar soma e contagem por tipo
+            var dict = new Dictionary<string, (double soma, int count)>();
 
             foreach (var doc in dados)
             {
-                foreach (var msg in doc.Mensagens)
+                if (doc.Tipo == null) continue;
+
+                foreach (var msg in doc.Mensagens ?? new List<Mensagem>())
                 {
-                    if (double.TryParse(msg.Caracteristica.Split(' ')[0], out var valor))
+                    if (double.TryParse(msg.Caracteristica?.Split(' ')[0], out var valor))
                     {
-                        soma += valor;
-                        contador++;
+                        if (!dict.ContainsKey(doc.Tipo))
+                            dict[doc.Tipo] = (0, 0);
+
+                        var atual = dict[doc.Tipo];
+                        dict[doc.Tipo] = (atual.soma + valor, atual.count + 1);
                     }
                 }
             }
 
-            double media = contador > 0 ? soma / contador : 0;
+            var resultado = new ResultadoAnalisePorTipo();
 
-            return Task.FromResult(new ResultadoAnalise
+            foreach (var par in dict)
             {
-                Media = media,
-                TotalAmostras = contador,
-                Resumo = $"Média calculada para {request.WavyId}: {media:F2}"
-            });
+                var media = par.Value.count > 0 ? par.Value.soma / par.Value.count : 0;
+
+                resultado.MediasPorTipo.Add(new TipoMedia
+                {
+                    Tipo = par.Key,
+                    Media = media,
+                    TotalAmostras = par.Value.count
+                });
+            }
+
+            return Task.FromResult(resultado);
         }
+
     }
 
     public class Modelo

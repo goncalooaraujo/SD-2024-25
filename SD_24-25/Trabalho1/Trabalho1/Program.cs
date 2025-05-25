@@ -30,26 +30,15 @@ namespace Wavy
         static void IniciarWavy(string wavyId)
         {
             string serverIp = "127.0.0.1";
-            int port = 5000;
+            int port = 6000; // ✅ Corrigido para bater com o servidor
 
             try
             {
-                Console.WriteLine($"[{wavyId}] Tentando conectar ao agregador {serverIp}:{port}...");
+                Console.WriteLine($"[{wavyId}] Tentando conectar ao servidor {serverIp}:{port}...");
                 TcpClient client = new TcpClient(serverIp, port);
                 Console.WriteLine($"[{wavyId}] Conexão estabelecida");
 
                 NetworkStream stream = client.GetStream();
-
-                string startMessage = "HELLO:" + wavyId;
-                byte[] startData = Encoding.ASCII.GetBytes(startMessage);
-                Console.WriteLine($"[{wavyId}] Enviando mensagem HELLO: {startMessage}");
-                stream.Write(startData, 0, startData.Length);
-
-                // Ler resposta do HELLO
-                byte[] helloBuffer = new byte[256];
-                int helloBytes = stream.Read(helloBuffer, 0, helloBuffer.Length);
-                string helloResponse = Encoding.ASCII.GetString(helloBuffer, 0, helloBytes);
-                Console.WriteLine($"[{wavyId}] Resposta ao HELLO: {helloResponse}");
 
                 for (int i = 0; i < 10; i++)
                 {
@@ -57,9 +46,19 @@ namespace Wavy
                     string carac = GerarCaracteristica(tipo);
                     string hora = DateTime.Now.ToString("HH:mm:ss");
 
-                    string message = $"WAVY_ID:{wavyId}|TIPO:{tipo}|CARAC:{carac}|HORA:{hora}";
-                    byte[] data = Encoding.ASCII.GetBytes(message);
-                    Console.WriteLine($"[{wavyId}] Enviando mensagem {i + 1}: {message}");
+                    string json = $@"{{
+    ""wavyId"": ""{wavyId}"",
+    ""tipo"": ""{tipo}"",
+    ""mensagens"": [
+        {{
+            ""Caracteristica"": ""{carac}"",
+            ""Hora"": ""{hora}""
+        }}
+    ]
+}}";
+
+                    byte[] data = Encoding.ASCII.GetBytes(json);
+                    Console.WriteLine($"[{wavyId}] Enviando JSON {i + 1}:\n{json}");
                     stream.Write(data, 0, data.Length);
 
                     byte[] buffer = new byte[256];
@@ -70,16 +69,22 @@ namespace Wavy
                     Thread.Sleep(1000);
                 }
 
-                string endMessage = ":" + wavyId;
-                Console.WriteLine($"[{wavyId}] Enviando mensagem de término: {endMessage}");
-                stream.Write(Encoding.ASCII.GetBytes(endMessage));
-                client.Close();
+                // Enviar mensagem final (pode ser ignorada ou usada como sinal de término)
+                string fimMessage = $@"{{
+    ""wavyId"": ""{wavyId}"",
+    ""tipo"": ""fim"",
+    ""mensagens"": []
+}}";
+                byte[] fimData = Encoding.ASCII.GetBytes(fimMessage);
+                stream.Write(fimData, 0, fimData.Length);
+                Console.WriteLine($"[{wavyId}] Enviou mensagem de término.");
 
-                Console.WriteLine($"[{wavyId}] Comunicação terminada");
+                client.Close();
+                Console.WriteLine($"[{wavyId}] Comunicação encerrada");
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[{wavyId}] Erro: " + e.Message);
+                Console.WriteLine($"[{wavyId}] Erro: {e.Message}");
             }
         }
 

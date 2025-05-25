@@ -6,6 +6,7 @@ package analise;
 
 service Analise {
   rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise);
+  rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo);
 }
 
 message DadosParaAnalise {
@@ -19,4 +20,14 @@ message ResultadoAnalise {
   double media = 1;
   int32 total_amostras = 2;
   string resumo = 3;
+}
+
+message TipoMedia {
+  string tipo = 1;
+  double media = 2;
+  int32 total_amostras = 3;
+}
+
+message ResultadoAnalisePorTipo {
+  repeated TipoMedia medias_por_tipo = 1;
 }

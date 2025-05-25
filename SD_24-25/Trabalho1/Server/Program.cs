@@ -159,18 +159,21 @@ namespace Servidor
                         var database = client.GetDatabase("sd");
                         var collection = database.GetCollection<Modelo>("dados");
 
-                        var wavyIds = await collection.DistinctAsync<string>("wavyId", FilterDefinition<Modelo>.Empty);
+                        // Obtemos a lista toda para memória com ToListAsync() antes de iterar
+                        var wavyList = await collection.Distinct<string>("wavyId", FilterDefinition<Modelo>.Empty).ToListAsync();
 
-                        if (!wavyIds.Any())
+                        if (wavyList.Count == 0)
                         {
                             Console.WriteLine("Nenhuma WAVY encontrada no banco de dados.");
                             continue;
                         }
 
                         Console.WriteLine("WAVYs registradas:");
-                        await wavyIds.ForEachAsync(id => Console.WriteLine($"- {id}"));
+                        foreach (var id in wavyList)
+                        {
+                            Console.WriteLine($"- {id}");
+                        }
 
-                        var wavyList = await wavyIds.ToListAsync();
                         Console.WriteLine($"\nTotal: {wavyList.Count} WAVY(s) encontrada(s)");
                     }
                     catch (Exception ex)
@@ -178,6 +181,7 @@ namespace Servidor
                         Console.WriteLine($"[ERRO] Ao listar WAVYs: {ex.Message}");
                     }
                 }
+
                 else if ((input?.StartsWith("analise ") ?? false) || (input?.StartsWith("1 ") ?? false))
                 {
                     var wavyId = input.StartsWith("1 ") ? input.Substring(2) : input.Substring(8);
@@ -197,17 +201,24 @@ namespace Servidor
                         var client = new Analise.AnaliseClient(channel);
 
                         Console.WriteLine($"Solicitando análise para {wavyId}...");
-                        var resposta = await client.AnalisarDadosAsync(new DadosParaAnalise
+                        var resposta = await client.AnalisarDadosPorTipoAsync(new DadosParaAnalise
                         {
                             WavyId = wavyId
                         });
 
-                        Console.WriteLine("\n=== RESULTADOS DA ANÁLISE ===");
+
+                        Console.WriteLine("\n=== RESULTADOS DA ANÁLISE POR TIPO ===");
                         Console.WriteLine($"WAVY ID: {wavyId}");
-                        Console.WriteLine($"Média calculada: {resposta.Media:F2}");
-                        Console.WriteLine($"Total de amostras: {resposta.TotalAmostras}");
-                        Console.WriteLine($"Resumo: {resposta.Resumo}");
+
+                        foreach (var mediaTipo in resposta.MediasPorTipo)
+                        {
+                            Console.WriteLine($"Tipo: {mediaTipo.Tipo}");
+                            Console.WriteLine($"  Média: {mediaTipo.Media:F2}");
+                            Console.WriteLine($"  Total de amostras: {mediaTipo.TotalAmostras}");
+                        }
+
                         Console.WriteLine("=============================");
+
                     }
                     catch (Exception ex)
                     {
