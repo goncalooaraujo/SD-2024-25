@@ -1,19 +1,19 @@
 ﻿syntax = "proto3";
 
 option csharp_namespace = "PreProcessamentoRpc";
-
 package preprocessamento;
 
 service PreProcessamento {
-  rpc ProcessarDados (DadosBrutos) returns (DadosProcessados);
+  // Normaliza uma mensagem de qualquer formato (JSON, XML, TXT, etc.)
+  rpc NormalizarMensagem (MensagemBruta) returns (MensagemNormalizada);
 }
 
-message DadosBrutos {
-  string dados = 1;
-  string tipo_processamento = 2;
-  string tipo_entrada = 3;
+message MensagemBruta {
+  string conteudo = 1;
 }
 
-message DadosProcessados {
-  string dados = 1;
+message MensagemNormalizada {
+  string tipo = 1;
+  string caracteristica = 2;
+  string hora = 3;
 }

@@ -16,7 +16,9 @@
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 		<PackageReference Include="MongoDB.Driver" Version="3.3.0" />
+		<PackageReference Include="RabbitMQ.Client" Version="6.4.0" />
 		<Protobuf Include="Protos\analise.proto" GrpcServices="Server" />
 	</ItemGroup>
+	
 
 </Project>

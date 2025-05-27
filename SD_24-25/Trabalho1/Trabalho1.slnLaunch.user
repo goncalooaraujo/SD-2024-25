@@ -3,11 +3,7 @@
     "Name": "Novo Perfil",
     "Projects": [
       {
-        "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
-        "Action": "Start"
-      },
-      {
-        "Path": "AnaliseRpc\\AnaliseRpc.csproj",
+        "Path": "Trabalho1\\Wavy.csproj",
         "Action": "Start"
       },
       {
@@ -15,11 +11,7 @@
         "Action": "Start"
       },
       {
-        "Path": "Server\\Server.csproj",
-        "Action": "Start"
-      },
-      {
-        "Path": "Trabalho1\\Wavy.csproj",
+        "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
         "Action": "Start"
       }
     ]
