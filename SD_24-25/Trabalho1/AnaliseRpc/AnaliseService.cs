@@ -1,5 +1,11 @@
 ﻿using Grpc.Core;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Threading.Tasks;
 
 namespace AnaliseRpc
 {
@@ -11,28 +17,20 @@ namespace AnaliseRpc
             var database = client.GetDatabase("sd");
             var collection = database.GetCollection<Modelo>("dados");
 
-            // Pega todos os documentos para o WavyId (ignorar filtro tipo para agrupar depois)
-            var filter = Builders<Modelo>.Filter.Eq(x => x.WavyId, request.WavyId);
+            var filter = Builders<Modelo>.Filter.Regex(x => x.WavyId, new BsonRegularExpression($"^{request.WavyId}$", "i"));
             var dados = collection.Find(filter).ToList();
 
-            // Dicionário para armazenar soma e contagem por tipo
             var dict = new Dictionary<string, (double soma, int count)>();
 
             foreach (var doc in dados)
             {
-                if (doc.Tipo == null) continue;
+                if (string.IsNullOrEmpty(doc.Tipo)) continue;
 
-                foreach (var msg in doc.Mensagens ?? new List<Mensagem>())
-                {
-                    if (double.TryParse(msg.Caracteristica?.Split(' ')[0], out var valor))
-                    {
-                        if (!dict.ContainsKey(doc.Tipo))
-                            dict[doc.Tipo] = (0, 0);
+                // Acumula por tipo
+                if (!dict.ContainsKey(doc.Tipo))
+                    dict[doc.Tipo] = (0, 0);
 
-                        var atual = dict[doc.Tipo];
-                        dict[doc.Tipo] = (atual.soma + valor, atual.count + 1);
-                    }
-                }
+                dict[doc.Tipo] = (dict[doc.Tipo].soma + doc.Valor, dict[doc.Tipo].count + 1);
             }
 
             var resultado = new ResultadoAnalisePorTipo();
@@ -51,20 +49,26 @@ namespace AnaliseRpc
 
             return Task.FromResult(resultado);
         }
-
     }
 
     public class Modelo
     {
-        public string? Id { get; set; }
-        public string? WavyId { get; set; }
-        public string? Tipo { get; set; }
-        public List<Mensagem>? Mensagens { get; set; }
-    }
+        [BsonId]
+        public ObjectId Id { get; set; }
 
-    public class Mensagem
-    {
-        public string? Caracteristica { get; set; }
+        [BsonElement("wavyId")]
+        public string? WavyId { get; set; }
+
+        [BsonElement("tipo")]
+        public string? Tipo { get; set; }
+
+        [BsonElement("valor")]
+        public double Valor { get; set; }
+
+        [BsonElement("unidade")]
+        public string? Unidade { get; set; }
+
+        [BsonElement("hora")]
         public string? Hora { get; set; }
     }
 }

@@ -6,23 +6,17 @@ using System.Threading;
 using System.IO;
 using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
-using System.Collections.Generic;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using Grpc.Net.Client;
 using AnaliseRpc;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Xml;
+using System.Text.RegularExpressions;
 
 namespace Servidor
 {
-    class Mensagem
-    {
-        [BsonElement("caracteristica")]
-        public string? Caracteristica { get; set; }
-
-        [BsonElement("hora")]
-        public string? Hora { get; set; }
-    }
-
     class Modelo
     {
         [BsonId]
@@ -34,8 +28,14 @@ namespace Servidor
         [BsonElement("tipo")]
         public string? Tipo { get; set; }
 
-        [BsonElement("mensagens")]
-        public List<Mensagem>? Mensagens { get; set; }
+        [BsonElement("valor")]
+        public double Valor { get; set; }
+
+        [BsonElement("unidade")]
+        public string? Unidade { get; set; }
+
+        [BsonElement("hora")]
+        public string? Hora { get; set; }
     }
 
     static class MongoHelper
@@ -49,32 +49,18 @@ namespace Servidor
             collection = database.GetCollection<Modelo>("dados");
         }
 
-        public static void GuardarDados(string json)
+        public static void GuardarDados(string mensagem)
         {
             try
             {
-                Console.WriteLine($"[MongoDB] Recebido JSON: {json}"); // Log do JSON recebido
+                Console.WriteLine($"[MongoDB] Recebido: {mensagem}");
 
-                var jObject = JObject.Parse(json);
-                var modelo = new Modelo
+                var modelo = ExtrairModelo(mensagem);
+                if (modelo == null)
                 {
-                    WavyId = jObject["wavyId"]?.ToString(),
-                    Tipo = jObject["tipo"]?.ToString(),
-                    Mensagens = new List<Mensagem>()
-                };
-
-                foreach (var msg in jObject["mensagens"])
-                {
-                    modelo.Mensagens.Add(new Mensagem
-                    {
-                        Caracteristica = msg["Caracteristica"]?.ToString(),
-                        Hora = msg["Hora"]?.ToString()
-                    });
+                    Console.WriteLine("[MongoDB ERRO] Não foi possível interpretar a mensagem.");
+                    return;
                 }
-
-                var client = new MongoClient("mongodb://localhost:27017");
-                var database = client.GetDatabase("sd");
-                var collection = database.GetCollection<Modelo>("dados");
 
                 collection.InsertOne(modelo);
                 Console.WriteLine($"[MongoDB] Dados inseridos para WAVY: {modelo.WavyId}");
@@ -85,9 +71,84 @@ namespace Servidor
             }
         }
 
-        public static List<Modelo> ObterDadosPorWavy(string wavyId)
+        private static Modelo? ExtrairModelo(string msg)
         {
-            return collection.Find(x => x.WavyId == wavyId).ToList();
+            try
+            {
+                msg = msg.Trim();
+
+                // JSON
+                if (msg.StartsWith("{") && msg.EndsWith("}"))
+                {
+                    var jObject = JObject.Parse(msg);
+                    return new Modelo
+                    {
+                        WavyId = jObject["wavyId"]?.ToString(),
+                        Tipo = jObject["tipo"]?.ToString(),
+                        Valor = jObject["valor"]?.ToObject<double>() ?? 0,
+                        Unidade = jObject["unidade"]?.ToString(),
+                        Hora = jObject["hora"]?.ToString(),
+                    };
+                }
+
+                // XML
+                if (msg.StartsWith("<") && msg.EndsWith(">"))
+                {
+                    var xmlDoc = new XmlDocument();
+                    xmlDoc.LoadXml(msg);
+                    var root = xmlDoc.DocumentElement;
+
+                    if (root == null) return null;
+
+                    return new Modelo
+                    {
+                        WavyId = root.SelectSingleNode("wavyId")?.InnerText,
+                        Tipo = root.SelectSingleNode("tipo")?.InnerText,
+                        Valor = double.TryParse(root.SelectSingleNode("valor")?.InnerText?.Replace(",", "."), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val) ? val : 0,
+                        Unidade = root.SelectSingleNode("unidade")?.InnerText,
+                        Hora = root.SelectSingleNode("hora")?.InnerText,
+                    };
+                }
+
+                // CSV (wavyId,tipo,valor,unidade,hora)
+                var partes = msg.Split(',');
+                if (partes.Length == 5)
+                {
+                    return new Modelo
+                    {
+                        WavyId = partes[0],
+                        Tipo = partes[1],
+                        Valor = double.TryParse(partes[2].Replace(",", "."), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val) ? val : 0,
+                        Unidade = partes[3],
+                        Hora = partes[4]
+                    };
+                }
+
+                // TXT (WAVY ID: WAVY_003 | Tipo: salinidade | Valor: 34.50 PSU | Hora: 12:31:45)
+                if (msg.Contains("WAVY ID:") && msg.Contains("Tipo:") && msg.Contains("Valor:") && msg.Contains("Hora:"))
+                {
+                    var wavyMatch = Regex.Match(msg, @"WAVY ID:\s*(\S+)");
+                    var tipoMatch = Regex.Match(msg, @"Tipo:\s*([^|]+)");
+                    var valorMatch = Regex.Match(msg, @"Valor:\s*([\d.,]+)");
+                    var unidadeMatch = Regex.Match(msg, @"Valor:\s*[\d.,]+\s*([^\s|]+)");
+                    var horaMatch = Regex.Match(msg, @"Hora:\s*([^\s|]+)");
+
+                    return new Modelo
+                    {
+                        WavyId = wavyMatch.Groups[1].Value.Trim(),
+                        Tipo = tipoMatch.Groups[1].Value.Trim(),
+                        Valor = double.TryParse(valorMatch.Groups[1].Value.Replace(",", "."), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val) ? val : 0,
+                        Unidade = unidadeMatch.Groups[1].Value.Trim(),
+                        Hora = horaMatch.Groups[1].Value.Trim()
+                    };
+                }
+
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 
@@ -103,7 +164,7 @@ namespace Servidor
             {
                 var mongoClient = new MongoClient("mongodb://localhost:27017");
                 var database = mongoClient.GetDatabase("sd");
-                database.RunCommandAsync((Command<BsonDocument>)"{ping:1}").Wait();
+                await database.RunCommandAsync((Command<BsonDocument>)"{ping:1}");
                 Console.WriteLine("[MongoDB] Conexão bem-sucedida!");
             }
             catch (Exception ex)
@@ -112,14 +173,11 @@ namespace Servidor
                 return;
             }
 
-            // Configurar cliente RPC para análise
             rpcChannel = GrpcChannel.ForAddress("http://localhost:50052");
             rpcClient = new Analise.AnaliseClient(rpcChannel);
 
-            // Iniciar thread para análise sob demanda
             ThreadPool.QueueUserWorkItem(async _ => await IniciarInterfaceAnalise());
 
-            // Iniciar servidor TCP
             int port = 6000;
             TcpListener server = new TcpListener(IPAddress.Any, port);
             server.Start();
@@ -159,7 +217,6 @@ namespace Servidor
                         var database = client.GetDatabase("sd");
                         var collection = database.GetCollection<Modelo>("dados");
 
-                        // Obtemos a lista toda para memória com ToListAsync() antes de iterar
                         var wavyList = await collection.Distinct<string>("wavyId", FilterDefinition<Modelo>.Empty).ToListAsync();
 
                         if (wavyList.Count == 0)
@@ -168,11 +225,8 @@ namespace Servidor
                             continue;
                         }
 
-                        Console.WriteLine("WAVYs registradas:");
                         foreach (var id in wavyList)
-                        {
                             Console.WriteLine($"- {id}");
-                        }
 
                         Console.WriteLine($"\nTotal: {wavyList.Count} WAVY(s) encontrada(s)");
                     }
@@ -181,7 +235,6 @@ namespace Servidor
                         Console.WriteLine($"[ERRO] Ao listar WAVYs: {ex.Message}");
                     }
                 }
-
                 else if ((input?.StartsWith("analise ") ?? false) || (input?.StartsWith("1 ") ?? false))
                 {
                     var wavyId = input.StartsWith("1 ") ? input.Substring(2) : input.Substring(8);
@@ -196,16 +249,7 @@ namespace Servidor
 
                     try
                     {
-                        Console.WriteLine($"Conectando ao serviço RPC de análise...");
-                        using var channel = GrpcChannel.ForAddress("http://localhost:50052");
-                        var client = new Analise.AnaliseClient(channel);
-
-                        Console.WriteLine($"Solicitando análise para {wavyId}...");
-                        var resposta = await client.AnalisarDadosPorTipoAsync(new DadosParaAnalise
-                        {
-                            WavyId = wavyId
-                        });
-
+                        var resposta = await rpcClient.AnalisarDadosPorTipoAsync(new DadosParaAnalise { WavyId = wavyId });
 
                         Console.WriteLine("\n=== RESULTADOS DA ANÁLISE POR TIPO ===");
                         Console.WriteLine($"WAVY ID: {wavyId}");
@@ -218,21 +262,15 @@ namespace Servidor
                         }
 
                         Console.WriteLine("=============================");
-
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[ERRO] Na análise: {ex.Message}");
-                        Console.WriteLine("Verifique se:");
-                        Console.WriteLine("- O serviço de análise está rodando");
-                        Console.WriteLine("- O WAVY_ID está correto");
-                        Console.WriteLine("- Há dados no MongoDB para esta WAVY");
                     }
                 }
                 else
                 {
-                    Console.WriteLine("[AVISO] Comando não reconhecido. Tente novamente.");
-                    Console.WriteLine("Dica: Use 'analise WAVY_001' ou '1 WAVY_001'");
+                    Console.WriteLine("[AVISO] Comando não reconhecido.");
                 }
             }
         }
@@ -241,7 +279,7 @@ namespace Servidor
         {
             TcpClient client = (TcpClient)obj;
             NetworkStream stream = client.GetStream();
-            byte[] buffer = new byte[1024];
+            byte[] buffer = new byte[2048];
 
             try
             {

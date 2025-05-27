@@ -1,4 +1,4 @@
-syntax = "proto3";
+﻿syntax = "proto3";
 
 option csharp_namespace = "PreProcessamentoRpc";
 
@@ -11,6 +11,7 @@ service PreProcessamento {
 message DadosBrutos {
   string dados = 1;
   string tipo_processamento = 2;
+  string tipo_entrada = 3;
 }
 
 message DadosProcessados {
