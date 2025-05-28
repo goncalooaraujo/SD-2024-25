@@ -5,10 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Xml;
 using Grpc.Net.Client;
 using PreProcessamentoRpc;
 
@@ -16,7 +14,7 @@ namespace Agregador
 {
     class MensagemInfo
     {
-        public string? Caracteristica { get; set; }
+        public string? Dados { get; set; }
         public string? Hora { get; set; }
     }
 
@@ -101,7 +99,7 @@ namespace Agregador
         {
             TcpClient client = (TcpClient)obj;
             NetworkStream stream = client.GetStream();
-            byte[] buffer = new byte[4096];  // buffer maior
+            byte[] buffer = new byte[4096];
             string wavyId = "";
 
             try
@@ -132,31 +130,37 @@ namespace Agregador
                         config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
                     }
 
-                    var (tipo, carac, hora) = ExtrairDados(message);
-                    if (tipo == null || carac == null || hora == null)
-                    {
-                        Console.WriteLine("[WARNING] Não conseguiu extrair dados da mensagem.");
-                        continue;
-                    }
-
-                    // Chamada RPC para pré-processamento
+                    // Send raw message to preprocessing service
+                    string dadosProcessados = message;
                     try
                     {
                         var respostaRpc = await rpcClient.ProcessarDadosAsync(new DadosBrutos
                         {
-                            Dados = carac,
+                            Dados = message, // Send the raw message
                             TipoProcessamento = config.PreProcessamento
                         });
-                        carac = respostaRpc.Dados;
+                        dadosProcessados = respostaRpc.Dados;
+                        Console.WriteLine($"[DEBUG] Dados processados pelo RPC: {dadosProcessados}");
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"Erro no RPC: {ex.Message}");
-                        // Fallback para processamento local se RPC falhar
-                        if (config.PreProcessamento == "uppercase")
-                            carac = carac.ToUpper();
-                        else if (config.PreProcessamento == "lowercase")
-                            carac = carac.ToLower();
+                        // If RPC fails, we can't process the message properly
+                        continue;
+                    }
+
+                    // Parse the JSON response to extract tipo for batching
+                    string tipo = "";
+                    try
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(dadosProcessados);
+                        var root = doc.RootElement;
+                        tipo = root.GetProperty("tipo").GetString() ?? "";
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WARNING] Erro ao extrair tipo do JSON: {ex.Message}");
+                        continue;
                     }
 
                     lock (mensagensLock)
@@ -166,8 +170,8 @@ namespace Agregador
 
                         mensagensPorWavy[wavyId].Add(new MensagemInfo
                         {
-                            Caracteristica = carac,
-                            Hora = hora
+                            Dados = dadosProcessados, // Store the processed JSON
+                            Hora = DateTime.Now.ToString("HH:mm:ss")
                         });
 
                         if (mensagensPorWavy[wavyId].Count >= config.VolumeDados)
@@ -192,125 +196,6 @@ namespace Agregador
             }
         }
 
-        static (string? tipo, string? carac, string? hora) ExtrairDados(string msg)
-        {
-            msg = msg.Trim();
-
-            // JSON
-            if (msg.StartsWith("{") && msg.EndsWith("}"))
-            {
-                try
-                {
-                    using JsonDocument doc = JsonDocument.Parse(msg);
-                    var root = doc.RootElement;
-
-                    string tipo = root.GetProperty("tipo").GetString() ?? "";
-                    string valorStr = root.GetProperty("valor").GetRawText();
-                    string unidade = root.GetProperty("unidade").GetString() ?? "";
-                    string hora = root.GetProperty("hora").GetString() ?? "";
-
-                    string carac = $"{valorStr} {unidade}".Trim();
-                    return (tipo, carac, hora);
-                }
-                catch
-                {
-                    return (null, null, null);
-                }
-            }
-
-            // XML
-            if (msg.StartsWith("<") && msg.EndsWith(">"))
-            {
-                try
-                {
-                    XmlDocument xmlDoc = new XmlDocument();
-                    xmlDoc.LoadXml(msg);
-                    var root = xmlDoc.DocumentElement;
-
-                    if (root == null) return (null, null, null);
-
-                    string tipo = root.SelectSingleNode("tipo")?.InnerText ?? "";
-                    string valor = root.SelectSingleNode("valor")?.InnerText ?? "";
-                    string unidade = root.SelectSingleNode("unidade")?.InnerText ?? "";
-                    string hora = root.SelectSingleNode("hora")?.InnerText ?? "";
-
-                    string carac = $"{valor} {unidade}".Trim();
-                    return (tipo, carac, hora);
-                }
-                catch
-                {
-                    return (null, null, null);
-                }
-            }
-
-            // CSV - assumindo formato fixo com 5 campos separados por vírgula
-            if (msg.Split(',').Length == 5)
-            {
-                try
-                {
-                    var partes = msg.Split(',');
-                    string tipo = partes[1].Trim();
-                    string valor = partes[2].Trim();
-                    string unidade = partes[3].Trim();
-                    string hora = partes[4].Trim();
-
-                    string carac = $"{valor} {unidade}".Trim();
-                    return (tipo, carac, hora);
-                }
-                catch
-                {
-                    return (null, null, null);
-                }
-            }
-
-            // TXT estilo: WAVY ID: WAVY_003 | Tipo: salinidade | Valor: 34.50 PSU | Hora: 12:31:45
-            if (msg.Contains("WAVY ID:") && msg.Contains("Tipo:") && msg.Contains("Valor:") && msg.Contains("Hora:"))
-            {
-                try
-                {
-                    // Regex para extrair os campos chave: Tipo, Valor, Unidade, Hora
-                    var tipoMatch = Regex.Match(msg, @"Tipo:\s*([^|]+)");
-                    var valorMatch = Regex.Match(msg, @"Valor:\s*([\d.,]+)");
-                    var unidadeMatch = Regex.Match(msg, @"Valor:\s*[\d.,]+\s*([^\s|]+)");
-                    var horaMatch = Regex.Match(msg, @"Hora:\s*([^\s|]+)");
-
-                    string tipo = tipoMatch.Success ? tipoMatch.Groups[1].Value.Trim() : "";
-                    string valor = valorMatch.Success ? valorMatch.Groups[1].Value.Trim() : "";
-                    string unidade = unidadeMatch.Success ? unidadeMatch.Groups[1].Value.Trim() : "";
-                    string hora = horaMatch.Success ? horaMatch.Groups[1].Value.Trim() : "";
-
-                    string carac = $"{valor} {unidade}".Trim();
-                    return (tipo, carac, hora);
-                }
-                catch
-                {
-                    return (null, null, null);
-                }
-            }
-
-            // Fallback ao formato antigo (TIPO:xxx|CARAC:yyy|HORA:zzz)
-            try
-            {
-                var partes = msg.Split('|');
-                string? tipo = null;
-                string? carac = null;
-                string? hora = null;
-
-                foreach (var parte in partes)
-                {
-                    if (parte.StartsWith("TIPO:")) tipo = parte[5..].Trim();
-                    else if (parte.StartsWith("CARAC:")) carac = parte[6..].Trim();
-                    else if (parte.StartsWith("HORA:")) hora = parte[5..].Trim();
-                }
-
-                return (tipo, carac, hora);
-            }
-            catch
-            {
-                return (null, null, null);
-            }
-        }
-
         static void EnviarParaServidor(string tipo, List<MensagemInfo> mensagens, ConfiguracaoWavy config, string wavyId)
         {
             try
@@ -322,8 +207,11 @@ namespace Agregador
                     mensagens = mensagens
                 };
 
-                string json = JsonSerializer.Serialize(jsonObj);
-                Console.WriteLine($"[DEBUG] JSON a ser enviado: {json}");
+                string json = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+                Console.WriteLine($"[DEBUG] JSON a ser enviado para servidor: {json}");
 
                 string serverIp = config.Servidor == "localhost" ? "127.0.0.1" : config.Servidor;
                 int serverPort = 6000;

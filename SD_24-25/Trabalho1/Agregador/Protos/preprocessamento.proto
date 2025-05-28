@@ -1,8 +1,6 @@
 syntax = "proto3";
 
-option csharp_namespace = "Agregador.Protos";
-
-package preprocessamento;
+option csharp_namespace = "PreProcessamentoRpc";
 
 service PreProcessamento {
   rpc ProcessarDados (DadosBrutos) returns (DadosProcessados);
@@ -10,7 +8,7 @@ service PreProcessamento {
 
 message DadosBrutos {
   string dados = 1;
-  string tipo_processamento = 2;
+  string tipoProcessamento = 2;
 }
 
 message DadosProcessados {

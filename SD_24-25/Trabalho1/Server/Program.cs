@@ -283,13 +283,15 @@ namespace Servidor
 
             try
             {
+                var remoteEndPoint = client.Client.RemoteEndPoint.ToString();
+
                 while (true)
                 {
                     int bytesRead = stream.Read(buffer, 0, buffer.Length);
                     if (bytesRead == 0) break;
 
                     string message = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                    Console.WriteLine("Dados recebidos do AGREGADOR: " + message);
+                    Console.WriteLine($"Dados recebidos do AGREGADOR ({remoteEndPoint}): {message}");
 
                     ficheiroMutex.WaitOne();
                     try
@@ -303,7 +305,8 @@ namespace Servidor
 
                     MongoHelper.GuardarDados(message);
 
-                    string resposta = "Dados recebidos com sucesso";
+                    // Do not send back the original message, just a status confirmation
+                    string resposta = $"Mensagem recebida com sucesso de {remoteEndPoint}";
                     byte[] respostaBytes = Encoding.ASCII.GetBytes(resposta);
                     stream.Write(respostaBytes, 0, respostaBytes.Length);
 
@@ -319,5 +322,6 @@ namespace Servidor
                 client.Close();
             }
         }
+
     }
 }
