@@ -1,22 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Grpc.Net.Client;
 using PreProcessamentoRpc;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 
 namespace Agregador
 {
-    class MensagemInfo
-    {
-        public string? Dados { get; set; }
-        public string? Hora { get; set; }
-    }
+    class MensagemInfo { public string? Dados { get; set; } public string? Hora { get; set; } }
 
     class ConfiguracaoWavy
     {
@@ -37,24 +33,33 @@ namespace Agregador
 
         static async Task Main()
         {
-            // Configurar cliente RPC
             rpcChannel = GrpcChannel.ForAddress("http://localhost:50051");
             rpcClient = new PreProcessamento.PreProcessamentoClient(rpcChannel);
-
             LerConfiguracoes("config.csv");
             reloadTimer = new Timer(_ => LerConfiguracoes("config.csv"), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
 
-            int port = 5000;
-            TcpListener server = new TcpListener(IPAddress.Any, port);
-            server.Start();
-            Console.WriteLine("AGREGADOR Pronto (RPC ativado)");
+            var factory = new ConnectionFactory() { HostName = "localhost" };
+            using var connection = factory.CreateConnection();
+            using var channel = connection.CreateModel();
+            channel.ExchangeDeclare(exchange: "sensores", type: ExchangeType.Topic);
+            string queueName = channel.QueueDeclare().QueueName;
+            channel.QueueBind(queue: queueName, exchange: "sensores", routingKey: "#");
 
-            while (true)
+            var consumer = new EventingBasicConsumer(channel);
+            consumer.Received += async (model, ea) =>
             {
-                TcpClient client = await server.AcceptTcpClientAsync();
-                Thread clientThread = new Thread(async () => await HandleClient(client));
-                clientThread.Start();
-            }
+                string mensagem = Encoding.UTF8.GetString(ea.Body.ToArray());
+                Console.WriteLine($"[AGREGADOR] Mensagem recebida: {mensagem}");
+                string wavyId = ExtrairWavyId(mensagem);
+                if (!string.IsNullOrEmpty(wavyId))
+                {
+                    await ProcessarMensagem(wavyId, mensagem);
+                }
+            };
+
+            channel.BasicConsume(queue: queueName, autoAck: true, consumer: consumer);
+            Console.WriteLine("AGREGADOR a escutar mensagens RabbitMQ...");
+            await Task.Delay(Timeout.Infinite);
         }
 
         static void LerConfiguracoes(string caminho)
@@ -62,137 +67,70 @@ namespace Agregador
             try
             {
                 if (!File.Exists(caminho)) return;
-
                 var novasConfigs = new Dictionary<string, ConfiguracaoWavy>();
-
                 foreach (var linha in File.ReadAllLines(caminho))
                 {
                     var partes = linha.Split(':');
                     if (partes.Length == 4)
                     {
-                        string id = partes[0];
-                        string proc = partes[1];
-                        int volume = int.TryParse(partes[2], out var v) ? v : 3;
-                        string servidor = partes[3];
-                        novasConfigs[id] = new ConfiguracaoWavy
+                        novasConfigs[partes[0]] = new ConfiguracaoWavy
                         {
-                            PreProcessamento = proc,
-                            VolumeDados = volume,
-                            Servidor = servidor
+                            PreProcessamento = partes[1],
+                            VolumeDados = int.TryParse(partes[2], out int v) ? v : 3,
+                            Servidor = partes[3]
                         };
                     }
                 }
-
-                lock (configLock)
-                {
-                    configuracoes = novasConfigs;
-                }
-                Console.WriteLine("[CONFIG] Ficheiro de configuração recarregado");
+                lock (configLock) configuracoes = novasConfigs;
+                Console.WriteLine("[CONFIG] Recarregado com sucesso.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[CONFIG] Erro ao recarregar configurações: {ex.Message}");
+                Console.WriteLine($"[CONFIG] Erro: {ex.Message}");
             }
         }
 
-        static async Task HandleClient(object obj)
+        static async Task ProcessarMensagem(string wavyId, string message)
         {
-            TcpClient client = (TcpClient)obj;
-            NetworkStream stream = client.GetStream();
-            byte[] buffer = new byte[4096];
-            string wavyId = "";
+            ConfiguracaoWavy config;
+            lock (configLock) config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
 
+            string dadosProcessados = message;
             try
             {
-                while (true)
-                {
-                    int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-                    if (bytesRead == 0) break;
-
-                    string message = Encoding.ASCII.GetString(buffer, 0, bytesRead).Trim();
-                    Console.WriteLine("Recebido da WAVY: " + message);
-
-                    if (message.StartsWith("HELLO:"))
-                    {
-                        wavyId = message.Substring(6).Trim();
-                        if (!configuracoes.ContainsKey(wavyId))
-                        {
-                            Console.WriteLine($"[WARNING] WAVY_ID '{wavyId}' não está na configuração!");
-                        }
-                        continue;
-                    }
-
-                    if (string.IsNullOrEmpty(wavyId)) continue;
-
-                    ConfiguracaoWavy config;
-                    lock (configLock)
-                    {
-                        config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
-                    }
-
-                    // Send raw message to preprocessing service
-                    string dadosProcessados = message;
-                    try
-                    {
-                        var respostaRpc = await rpcClient.ProcessarDadosAsync(new DadosBrutos
-                        {
-                            Dados = message, // Send the raw message
-                            TipoProcessamento = config.PreProcessamento
-                        });
-                        dadosProcessados = respostaRpc.Dados;
-                        Console.WriteLine($"[DEBUG] Dados processados pelo RPC: {dadosProcessados}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Erro no RPC: {ex.Message}");
-                        // If RPC fails, we can't process the message properly
-                        continue;
-                    }
-
-                    // Parse the JSON response to extract tipo for batching
-                    string tipo = "";
-                    try
-                    {
-                        using JsonDocument doc = JsonDocument.Parse(dadosProcessados);
-                        var root = doc.RootElement;
-                        tipo = root.GetProperty("tipo").GetString() ?? "";
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[WARNING] Erro ao extrair tipo do JSON: {ex.Message}");
-                        continue;
-                    }
-
-                    lock (mensagensLock)
-                    {
-                        if (!mensagensPorWavy.ContainsKey(wavyId))
-                            mensagensPorWavy[wavyId] = new List<MensagemInfo>();
-
-                        mensagensPorWavy[wavyId].Add(new MensagemInfo
-                        {
-                            Dados = dadosProcessados, // Store the processed JSON
-                            Hora = DateTime.Now.ToString("HH:mm:ss")
-                        });
-
-                        if (mensagensPorWavy[wavyId].Count >= config.VolumeDados)
-                        {
-                            EnviarParaServidor(tipo, mensagensPorWavy[wavyId], config, wavyId);
-                            mensagensPorWavy[wavyId].Clear();
-                        }
-                    }
-
-                    string response = "Mensagem recebida e processada";
-                    byte[] responseBytes = Encoding.ASCII.GetBytes(response);
-                    await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
-                }
+                var respostaRpc = await rpcClient.ProcessarDadosAsync(new DadosBrutos { Dados = message, TipoProcessamento = config.PreProcessamento });
+                dadosProcessados = respostaRpc.Dados;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Erro no HandleClient: {ex.Message}");
+                Console.WriteLine($"[RPC] Erro: {ex.Message}");
+                return;
             }
-            finally
+
+            string tipo = "";
+            try
             {
-                client.Close();
+                using var doc = JsonDocument.Parse(dadosProcessados);
+                tipo = doc.RootElement.GetProperty("tipo").GetString() ?? "";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[JSON] Erro: {ex.Message}");
+                return;
+            }
+
+            lock (mensagensLock)
+            {
+                if (!mensagensPorWavy.ContainsKey(wavyId))
+                    mensagensPorWavy[wavyId] = new List<MensagemInfo>();
+
+                mensagensPorWavy[wavyId].Add(new MensagemInfo { Dados = dadosProcessados, Hora = DateTime.Now.ToString("HH:mm:ss") });
+
+                if (mensagensPorWavy[wavyId].Count >= config.VolumeDados)
+                {
+                    EnviarParaServidor(tipo, mensagensPorWavy[wavyId], config, wavyId);
+                    mensagensPorWavy[wavyId].Clear();
+                }
             }
         }
 
@@ -200,36 +138,26 @@ namespace Agregador
         {
             try
             {
-                var jsonObj = new
-                {
-                    tipo = tipo,
-                    wavyId = wavyId,
-                    mensagens = mensagens
-                };
-
-                string json = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                });
-                Console.WriteLine($"[DEBUG] JSON a ser enviado para servidor: {json}");
-
-                string serverIp = config.Servidor == "localhost" ? "127.0.0.1" : config.Servidor;
-                int serverPort = 6000;
-
-                using TcpClient serverClient = new TcpClient(serverIp, serverPort);
-                NetworkStream stream = serverClient.GetStream();
-                byte[] dataBytes = Encoding.UTF8.GetBytes(json);
-                stream.Write(dataBytes, 0, dataBytes.Length);
-
-                // Ler resposta do servidor
-                byte[] responseBuffer = new byte[1024];
-                int bytesRead = stream.Read(responseBuffer, 0, responseBuffer.Length);
-                string resposta = Encoding.ASCII.GetString(responseBuffer, 0, bytesRead);
-                Console.WriteLine($"[DEBUG] Resposta do Servidor: {resposta}");
+                var jsonObj = new { tipo, wavyId, mensagens };
+                string json = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions { WriteIndented = true });
+                Console.WriteLine($"[ENVIAR] JSON:{json}");
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[ERRO] Ao enviar para servidor: {e.Message}");
+                Console.WriteLine($"[ERRO] Envio: {e.Message}");
+            }
+        }
+
+        static string ExtrairWavyId(string mensagem)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(mensagem);
+                return doc.RootElement.GetProperty("wavyId").GetString() ?? "";
+            }
+            catch
+            {
+                return "";
             }
         }
     }

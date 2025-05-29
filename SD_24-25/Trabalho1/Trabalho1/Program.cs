@@ -1,7 +1,7 @@
 ﻿using System;
-using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using RabbitMQ.Client;
 
 namespace Wavy
 {
@@ -23,86 +23,64 @@ namespace Wavy
             for (int i = 0; i < quantidade; i++)
             {
                 string wavyId = $"WAVY_{i + 1:D3}";
-                Thread wavyThread = new Thread(() => IniciarWavy(wavyId, ""));
+                Thread wavyThread = new Thread(() => IniciarWavy(wavyId));
                 wavyThread.Start();
             }
         }
 
-        static void IniciarWavy(string wavyId, string _)
+        static void IniciarWavy(string wavyId)
         {
-            string serverIp = "127.0.0.1";
-            int port = 6000;
+            var factory = new ConnectionFactory() { HostName = "localhost" };
+            using var connection = factory.CreateConnection();
+            using var channel = connection.CreateModel();
 
-            try
+            channel.ExchangeDeclare(exchange: "sensores", type: ExchangeType.Topic);
+
+            for (int i = 0; i < 10; i++)
             {
-                Console.WriteLine($"[{wavyId}] Conectando ao servidor {serverIp}:{port}...");
-                using TcpClient client = new TcpClient(serverIp, port);
-                using NetworkStream stream = client.GetStream();
-                Console.WriteLine($"[{wavyId}] Conectado com sucesso.");
+                string tipo = tipos[random.Next(tipos.Length)];
+                (double valor, string unidade) = GerarCaracteristica(tipo);
+                string hora = DateTime.Now.ToString("HH:mm:ss");
+                string formato = formatos[random.Next(formatos.Length)];
+                string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
 
-                for (int i = 0; i < 10; i++)
-                {
-                    string tipo = tipos[random.Next(tipos.Length)];
-                    (double valor, string unidade) = GerarCaracteristica(tipo);
-                    string hora = DateTime.Now.ToString("HH:mm:ss");
+                var body = Encoding.UTF8.GetBytes(mensagem);
+                channel.BasicPublish(exchange: "sensores", routingKey: tipo, basicProperties: null, body: body);
 
-                    string formato = formatos[random.Next(formatos.Length)]; // format per message
-                    string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
-
-                    byte[] data = Encoding.UTF8.GetBytes(mensagem);
-                    Console.WriteLine($"[{wavyId}] Enviando mensagem {i + 1} ({formato.ToUpper()}):\n{mensagem}\n");
-                    stream.Write(data, 0, data.Length);
-
-                    byte[] buffer = new byte[512];
-                    int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                    string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    Console.WriteLine($"[{wavyId}] Resposta: {response}");
-
-                    Thread.Sleep(1000);
-                }
-
-                // Mensagem de término — pode continuar em JSON
-                string fimMensagem = GerarMensagem("json", wavyId, "fim", 0, "", DateTime.Now.ToString("HH:mm:ss"));
-                byte[] fimData = Encoding.UTF8.GetBytes(fimMensagem);
-                stream.Write(fimData, 0, fimData.Length);
-                Console.WriteLine($"[{wavyId}] Mensagem de término enviada.");
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"[{wavyId}] Erro: {e.Message}");
+                Console.WriteLine($"[{wavyId}] Publicado no tópico '{tipo}':\n{mensagem}\n");
+                Thread.Sleep(1000);
             }
         }
-
 
         static string GerarMensagem(string formato, string wavyId, string tipo, double valor, string unidade, string hora)
         {
             return formato.ToLower() switch
             {
                 "json" => $@"{{
-    ""wavyId"": ""{wavyId}"",
-    ""tipo"": ""{tipo}"",
-    ""valor"": {valor.ToString("F2").Replace(",", ".")},
-    ""unidade"": ""{unidade}"",
-    ""hora"": ""{hora}""
-}}",
+                ""wavyId"": ""{wavyId}"",
+                ""tipo"": ""{tipo}"",
+                ""valor"": {valor.ToString("F2").Replace(",", ".")},
+                ""unidade"": ""{unidade}"",
+                ""hora"": ""{hora}""
+                }}",
 
                 "csv" => $"{wavyId},{tipo},{valor.ToString("F2").Replace(",", ".")},{unidade},{hora}",
 
                 "xml" => $@"<mensagem>
-    <wavyId>{wavyId}</wavyId>
-    <tipo>{tipo}</tipo>
-    <valor>{valor.ToString("F2").Replace(",", ".")}</valor>
-    <unidade>{unidade}</unidade>
-    <hora>{hora}</hora>
-</mensagem>",
+                <wavyId>{wavyId}</wavyId>
+                <tipo>{tipo}</tipo>
+                <valor>{valor.ToString("F2").Replace(",", ".")}</valor>
+                <unidade>{unidade}</unidade>
+                <hora>{hora}</hora>
+                </mensagem>",
 
-                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valor:F2} {unidade} | Hora: {hora}",
+                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valor.ToString("F2").Replace(",", ".")} {unidade} | Hora: {hora}",
 
                 _ => "{}" // fallback
             };
         }
 
-        static (double valor, string unidade) GerarCaracteristica(string tipo)
+        static (double, string) GerarCaracteristica(string tipo)
         {
             return tipo switch
             {
