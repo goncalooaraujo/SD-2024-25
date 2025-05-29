@@ -20,35 +20,56 @@ namespace Wavy
                 return;
             }
 
+            Console.WriteLine($"Iniciando {quantidade} WAVY(s)...");
+
             for (int i = 0; i < quantidade; i++)
             {
                 string wavyId = $"WAVY_{i + 1:D3}";
                 Thread wavyThread = new Thread(() => IniciarWavy(wavyId));
                 wavyThread.Start();
+
+                // Pequena pausa para evitar sobrecarga inicial
+                Thread.Sleep(100);
             }
+
+            Console.WriteLine("Pressione qualquer tecla para parar...");
+            Console.ReadKey();
         }
 
         static void IniciarWavy(string wavyId)
         {
-            var factory = new ConnectionFactory() { HostName = "localhost" };
-            using var connection = factory.CreateConnection();
-            using var channel = connection.CreateModel();
-
-            channel.ExchangeDeclare(exchange: "sensores", type: ExchangeType.Topic);
-
-            for (int i = 0; i < 10; i++)
+            try
             {
-                string tipo = tipos[random.Next(tipos.Length)];
-                (double valor, string unidade) = GerarCaracteristica(tipo);
-                string hora = DateTime.Now.ToString("HH:mm:ss");
-                string formato = formatos[random.Next(formatos.Length)];
-                string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
+                var factory = new ConnectionFactory() { HostName = "localhost" };
+                using var connection = factory.CreateConnection();
+                using var channel = connection.CreateModel();
 
-                var body = Encoding.UTF8.GetBytes(mensagem);
-                channel.BasicPublish(exchange: "sensores", routingKey: tipo, basicProperties: null, body: body);
+                channel.ExchangeDeclare(exchange: "sensores", type: ExchangeType.Topic);
 
-                Console.WriteLine($"[{wavyId}] Publicado no tópico '{tipo}':\n{mensagem}\n");
-                Thread.Sleep(1000);
+                Console.WriteLine($"[{wavyId}] Iniciado - enviando dados...");
+
+                for (int i = 0; i < 20; i++) // Aumentei para 20 mensagens para melhor teste
+                {
+                    string tipo = tipos[random.Next(tipos.Length)];
+                    (double valor, string unidade) = GerarCaracteristica(tipo);
+                    string hora = DateTime.Now.ToString("HH:mm:ss");
+                    string formato = formatos[random.Next(formatos.Length)];
+                    string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
+
+                    var body = Encoding.UTF8.GetBytes(mensagem);
+                    channel.BasicPublish(exchange: "sensores", routingKey: tipo, basicProperties: null, body: body);
+
+                    Console.WriteLine($"[{wavyId}] #{i + 1} Publicado ({formato}) no tópico '{tipo}': {mensagem}");
+
+                    // Intervalo aleatório entre 500ms e 2000ms
+                    Thread.Sleep(random.Next(500, 2000));
+                }
+
+                Console.WriteLine($"[{wavyId}] Concluído - 20 mensagens enviadas");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{wavyId}] ERRO: {ex.Message}");
             }
         }
 
@@ -56,27 +77,15 @@ namespace Wavy
         {
             return formato.ToLower() switch
             {
-                "json" => $@"{{
-                ""wavyId"": ""{wavyId}"",
-                ""tipo"": ""{tipo}"",
-                ""valor"": {valor.ToString("F2").Replace(",", ".")},
-                ""unidade"": ""{unidade}"",
-                ""hora"": ""{hora}""
-                }}",
+                "json" => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valor.ToString("F2").Replace(",", ".")},""unidade"":""{unidade}"",""hora"":""{hora}""}}",
 
                 "csv" => $"{wavyId},{tipo},{valor.ToString("F2").Replace(",", ".")},{unidade},{hora}",
 
-                "xml" => $@"<mensagem>
-                <wavyId>{wavyId}</wavyId>
-                <tipo>{tipo}</tipo>
-                <valor>{valor.ToString("F2").Replace(",", ".")}</valor>
-                <unidade>{unidade}</unidade>
-                <hora>{hora}</hora>
-                </mensagem>",
+                "xml" => $@"<mensagem><wavyId>{wavyId}</wavyId><tipo>{tipo}</tipo><valor>{valor.ToString("F2").Replace(",", ".")}</valor><unidade>{unidade}</unidade><hora>{hora}</hora></mensagem>",
 
                 "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valor.ToString("F2").Replace(",", ".")} {unidade} | Hora: {hora}",
 
-                _ => "{}" // fallback
+                _ => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valor.ToString("F2").Replace(",", ".")},""unidade"":""{unidade}"",""hora"":""{hora}""}}" // fallback para JSON
             };
         }
 
