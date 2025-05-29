@@ -29,6 +29,7 @@ namespace Agregador
         static readonly object configLock = new();
         static readonly object mensagensLock = new();
         static Timer reloadTimer;
+        static Timer flushTimer; // Timer para enviar mensagens pendentes
         static GrpcChannel rpcChannel;
         static PreProcessamento.PreProcessamentoClient rpcClient;
         static int mensagensRecebidas = 0;
@@ -37,6 +38,9 @@ namespace Agregador
         static async Task Main()
         {
             Console.WriteLine("=== AGREGADOR INICIANDO ===");
+
+            // Debug: mostrar informações do diretório
+            MostrarInformacoesDiretorio();
 
             try
             {
@@ -52,6 +56,9 @@ namespace Agregador
 
             LerConfiguracoes("config.csv");
             reloadTimer = new Timer(_ => LerConfiguracoes("config.csv"), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
+            // Timer para enviar mensagens pendentes a cada 30 segundos
+            flushTimer = new Timer(_ => EnviarMensagensPendentes(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
             try
             {
@@ -97,8 +104,12 @@ namespace Agregador
                 // Status timer
                 Timer statusTimer = new Timer(_ =>
                 {
-                    Console.WriteLine($"[STATUS] Recebidas: {mensagensRecebidas} | Enviadas: {mensagensEnviadas}");
+                    int pendentes = ContarMensagensPendentes();
+                    Console.WriteLine($"[STATUS] Recebidas: {mensagensRecebidas} | Enviadas: {mensagensEnviadas} | Pendentes: {pendentes}");
                 }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+
+                // Comando manual para forçar envio
+                Task.Run(() => MonitorarComandos());
 
                 await Task.Delay(Timeout.Infinite);
             }
@@ -108,43 +119,238 @@ namespace Agregador
             }
         }
 
-        static void LerConfiguracoes(string caminho)
+        static void MonitorarComandos()
+        {
+            while (true)
+            {
+                try
+                {
+                    Console.WriteLine("\n[COMANDO] Digite 'flush' para enviar mensagens pendentes ou 'status' para ver estatísticas:");
+                    var comando = Console.ReadLine()?.Trim().ToLower();
+
+                    switch (comando)
+                    {
+                        case "flush":
+                            Console.WriteLine("[COMANDO] Forçando envio de mensagens pendentes...");
+                            EnviarMensagensPendentes();
+                            break;
+                        case "status":
+                            MostrarStatus();
+                            break;
+                        case "exit":
+                        case "quit":
+                            Environment.Exit(0);
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[COMANDO] Erro: {ex.Message}");
+                }
+            }
+        }
+
+        static void MostrarStatus()
+        {
+            lock (mensagensLock)
+            {
+                Console.WriteLine("\n=== STATUS DETALHADO ===");
+                Console.WriteLine($"Mensagens recebidas: {mensagensRecebidas}");
+                Console.WriteLine($"Mensagens enviadas: {mensagensEnviadas}");
+                Console.WriteLine($"Mensagens pendentes: {ContarMensagensPendentes()}");
+                Console.WriteLine("\nMensagens por WAVY:");
+
+                foreach (var kvp in mensagensPorWavy)
+                {
+                    var config = configuracoes.ContainsKey(kvp.Key) ? configuracoes[kvp.Key] : new ConfiguracaoWavy();
+                    Console.WriteLine($"  {kvp.Key}: {kvp.Value.Count}/{config.VolumeDados} mensagens");
+                }
+                Console.WriteLine("========================\n");
+            }
+        }
+
+        static int ContarMensagensPendentes()
+        {
+            lock (mensagensLock)
+            {
+                int total = 0;
+                foreach (var lista in mensagensPorWavy.Values)
+                {
+                    total += lista.Count;
+                }
+                return total;
+            }
+        }
+
+        static void EnviarMensagensPendentes()
+        {
+            Console.WriteLine("[FLUSH] Verificando mensagens pendentes...");
+
+            lock (mensagensLock)
+            {
+                var wavysComMensagens = new List<string>();
+                foreach (var kvp in mensagensPorWavy)
+                {
+                    if (kvp.Value.Count > 0)
+                    {
+                        wavysComMensagens.Add(kvp.Key);
+                    }
+                }
+
+                foreach (var wavyId in wavysComMensagens)
+                {
+                    var mensagens = mensagensPorWavy[wavyId];
+                    if (mensagens.Count > 0)
+                    {
+                        var config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+                        Console.WriteLine($"[FLUSH] Enviando {mensagens.Count} mensagens pendentes de {wavyId}");
+
+                        var mensagensParaEnviar = new List<MensagemInfo>(mensagens);
+                        Task.Run(() => EnviarParaServidor(mensagensParaEnviar, config, wavyId));
+                        mensagens.Clear();
+                    }
+                }
+            }
+        }
+
+        static void MostrarInformacoesDiretorio()
         {
             try
             {
-                if (!File.Exists(caminho))
+                string diretorioAtual = Directory.GetCurrentDirectory();
+                string diretorioExecutavel = AppDomain.CurrentDomain.BaseDirectory;
+
+                Console.WriteLine($"[DEBUG] Diretório atual: {diretorioAtual}");
+                Console.WriteLine($"[DEBUG] Diretório do executável: {diretorioExecutavel}");
+
+                Console.WriteLine("[DEBUG] Arquivos no diretório atual:");
+                var arquivos = Directory.GetFiles(diretorioAtual);
+                foreach (var arquivo in arquivos)
                 {
-                    Console.WriteLine("[CONFIG] Arquivo config.csv não encontrado, usando configurações padrão");
+                    Console.WriteLine($"[DEBUG] - {Path.GetFileName(arquivo)}");
+                }
+
+                if (diretorioAtual != diretorioExecutavel)
+                {
+                    Console.WriteLine("[DEBUG] Arquivos no diretório do executável:");
+                    var arquivosExec = Directory.GetFiles(diretorioExecutavel);
+                    foreach (var arquivo in arquivosExec)
+                    {
+                        Console.WriteLine($"[DEBUG] - {Path.GetFileName(arquivo)}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DEBUG] Erro ao listar arquivos: {ex.Message}");
+            }
+        }
+
+        static void LerConfiguracoes(string nomeArquivo)
+        {
+            try
+            {
+                // Tentar múltiplos caminhos
+                string[] caminhosPossiveis = {
+                    nomeArquivo, // Diretório atual
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, nomeArquivo), // Diretório do executável
+                    Path.Combine(Directory.GetCurrentDirectory(), nomeArquivo), // Diretório de trabalho
+                    Path.Combine(Environment.CurrentDirectory, nomeArquivo) // Diretório do ambiente
+                };
+
+                string caminhoEncontrado = null;
+                foreach (var caminho in caminhosPossiveis)
+                {
+                    Console.WriteLine($"[CONFIG] Tentando: {caminho}");
+                    if (File.Exists(caminho))
+                    {
+                        caminhoEncontrado = caminho;
+                        Console.WriteLine($"[CONFIG] Arquivo encontrado em: {caminho}");
+                        break;
+                    }
+                }
+
+                if (caminhoEncontrado == null)
+                {
+                    Console.WriteLine($"[CONFIG] Arquivo {nomeArquivo} não encontrado em nenhum local, criando arquivo padrão...");
+                    CriarArquivoConfigPadrao(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, nomeArquivo));
                     return;
                 }
 
                 var novasConfigs = new Dictionary<string, ConfiguracaoWavy>();
-                foreach (var linha in File.ReadAllLines(caminho))
+                var linhas = File.ReadAllLines(caminhoEncontrado);
+
+                Console.WriteLine($"[CONFIG] Lendo {linhas.Length} linhas do arquivo");
+
+                foreach (var linha in linhas)
                 {
+                    if (string.IsNullOrWhiteSpace(linha) || linha.StartsWith("#"))
+                        continue;
+
                     var partes = linha.Split(':');
                     if (partes.Length == 4)
                     {
-                        novasConfigs[partes[0]] = new ConfiguracaoWavy
+                        string wavyId = partes[0].Trim();
+                        novasConfigs[wavyId] = new ConfiguracaoWavy
                         {
-                            PreProcessamento = partes[1],
-                            VolumeDados = int.TryParse(partes[2], out int v) ? v : 3,
-                            Servidor = partes[3]
+                            PreProcessamento = partes[1].Trim(),
+                            VolumeDados = int.TryParse(partes[2].Trim(), out int v) ? v : 3,
+                            Servidor = partes[3].Trim()
                         };
+                        Console.WriteLine($"[CONFIG] {wavyId}: PreProc={partes[1].Trim()}, Volume={partes[2].Trim()}, Servidor={partes[3].Trim()}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[CONFIG] Linha inválida ignorada: {linha}");
                     }
                 }
+
                 lock (configLock) configuracoes = novasConfigs;
-                Console.WriteLine($"[CONFIG] Recarregado - {novasConfigs.Count} configurações");
+                Console.WriteLine($"[CONFIG] Recarregado com sucesso - {novasConfigs.Count} configurações ativas");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[CONFIG] Erro: {ex.Message}");
+                Console.WriteLine($"[CONFIG] StackTrace: {ex.StackTrace}");
+            }
+        }
+
+        static void CriarArquivoConfigPadrao(string caminho)
+        {
+            try
+            {
+                var configPadrao = new StringBuilder();
+                configPadrao.AppendLine("# Arquivo de configuração do Agregador");
+                configPadrao.AppendLine("# Formato: wavyId:preProcessamento:volumeDados:servidor");
+                configPadrao.AppendLine("WAVY_001:none:3:localhost");
+                configPadrao.AppendLine("WAVY_002:filtro:5:localhost");
+                configPadrao.AppendLine("WAVY_003:normalizacao:2:localhost");
+                configPadrao.AppendLine("WAVY_004:none:4:localhost");
+                configPadrao.AppendLine("WAVY_005:none:3:localhost");
+
+                File.WriteAllText(caminho, configPadrao.ToString());
+                Console.WriteLine($"[CONFIG] Arquivo padrão criado em: {caminho}");
+
+                // Recarregar as configurações
+                LerConfiguracoes(Path.GetFileName(caminho));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CONFIG] Erro ao criar arquivo padrão: {ex.Message}");
             }
         }
 
         static async Task ProcessarMensagem(string wavyId, string message)
         {
             ConfiguracaoWavy config;
-            lock (configLock) config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+            lock (configLock)
+            {
+                config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+                if (!configuracoes.ContainsKey(wavyId))
+                {
+                    Console.WriteLine($"[CONFIG] Usando configuração padrão para {wavyId}");
+                }
+            }
 
             string dadosProcessados = message;
 
