@@ -9,50 +9,69 @@ namespace PreProcessamentoRpc
     {
         public override Task<DadosProcessados> ProcessarDados(DadosBrutos request, ServerCallContext context)
         {
-            // First, extract data from the raw message
-            var (tipo, valor, unidade, hora, wavyId) = ExtrairDados(request.Dados);
-
-            if (tipo == null || valor == null || hora == null)
+            try
             {
-                // Return error or empty result
-                return Task.FromResult(new DadosProcessados { Dados = "{\"error\": \"Could not parse message\"}" });
+                // Extract data from the raw message
+                var (tipo, valor, unidade, hora, wavyId) = ExtrairDados(request.Dados);
+
+                if (string.IsNullOrEmpty(wavyId) || tipo == null || valor == null || hora == null)
+                {
+                    // Return error with more details
+                    return Task.FromResult(new DadosProcessados
+                    {
+                        Dados = "{\"error\": \"Could not parse message\", \"success\": false}"
+                    });
+                }
+
+                // Apply preprocessing to the valor if needed
+                string valorProcessado = valor;
+                switch (request.TipoProcessamento)
+                {
+                    case "uppercase":
+                        valorProcessado = valor.ToUpper();
+                        break;
+                    case "lowercase":
+                        valorProcessado = valor.ToLower();
+                        break;
+                    case "normalize":
+                        valorProcessado = valor.Trim().ToLower();
+                        break;
+                    default:
+                        // No processing
+                        break;
+                }
+
+                // Convert to standardized JSON format
+                var jsonObj = new
+                {
+                    wavyId = wavyId,
+                    tipo = tipo,
+                    valor = valorProcessado,
+                    unidade = unidade,
+                    hora = hora,
+                    processedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    success = true
+                };
+
+                string jsonResult = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                return Task.FromResult(new DadosProcessados { Dados = jsonResult });
             }
-
-            // Apply preprocessing to the valor if needed
-            string valorProcessado = valor;
-            switch (request.TipoProcessamento)
+            catch (Exception ex)
             {
-                case "uppercase":
-                    valorProcessado = valor.ToUpper();
-                    break;
-                case "lowercase":
-                    valorProcessado = valor.ToLower();
-                    break;
-                case "normalize":
-                    valorProcessado = valor.Trim().ToLower();
-                    break;
-                default:
-                    // No processing
-                    break;
+                // Enhanced error handling
+                var errorObj = new
+                {
+                    error = $"Processing error: {ex.Message}",
+                    success = false
+                };
+
+                string errorJson = JsonSerializer.Serialize(errorObj);
+                return Task.FromResult(new DadosProcessados { Dados = errorJson });
             }
-
-            // Convert to standardized JSON format
-            var jsonObj = new
-            {
-                wavyId = wavyId,
-                tipo = tipo,
-                valor = valorProcessado,
-                unidade = unidade,
-                hora = hora,
-                processedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            };
-
-            string jsonResult = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-
-            return Task.FromResult(new DadosProcessados { Dados = jsonResult });
         }
 
         private static (string? tipo, string? valor, string? unidade, string? hora, string? wavyId) ExtrairDados(string msg)
@@ -107,21 +126,23 @@ namespace PreProcessamentoRpc
             }
 
             // CSV - assumindo formato: wavyId,tipo,valor,unidade,hora
-            if (msg.Split(',').Length == 5)
+            var csvParts = msg.Split(',');
+            if (csvParts.Length == 5 || csvParts.Length == 6)
             {
                 try
                 {
-                    var partes = msg.Split(',');
-                    string wavyId = partes[0].Trim();
-                    string tipo = partes[1].Trim();
-                    string valor = partes[2].Trim();
-                    string unidade = partes[3].Trim();
-                    string hora = partes[4].Trim();
+                    string wavyId = csvParts[0].Trim();
+                    string tipo = csvParts[1].Trim();
+                    string valor = csvParts[2].Trim();
+                    string unidade = csvParts[3].Trim();
+                    string hora = csvParts[4].Trim();
+                    // Ignore the 6th field (data) if present
 
                     return (tipo, valor, unidade, hora, wavyId);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Console.WriteLine($"[CSV PARSE ERROR] {ex.Message}");
                     return (null, null, null, null, null);
                 }
             }

@@ -34,6 +34,15 @@ namespace Agregador
         static PreProcessamento.PreProcessamentoClient rpcClient;
         static int mensagensRecebidas = 0;
         static int mensagensEnviadas = 0;
+        static int errosProcessamento = 0;
+        static Dictionary<string, int> errosPorFormato = new()
+        {
+            { "json", 0 },
+            { "xml", 0 },
+            { "csv", 0 },
+            { "txt", 0 },
+            { "outro", 0 }
+        };
 
         static async Task Main()
         {
@@ -80,17 +89,12 @@ namespace Agregador
                         string mensagem = Encoding.UTF8.GetString(ea.Body.ToArray());
                         Interlocked.Increment(ref mensagensRecebidas);
 
-                        Console.WriteLine($"[AGREGADOR] #{mensagensRecebidas} Mensagem recebida: {mensagem}");
+                        // Detectar formato para logging
+                        string formato = DetectarFormato(mensagem);
+                        Console.WriteLine($"[AGREGADOR] #{mensagensRecebidas} Mensagem recebida ({formato}): {mensagem}");
 
-                        string wavyId = ExtrairWavyId(mensagem);
-                        if (!string.IsNullOrEmpty(wavyId))
-                        {
-                            await ProcessarMensagem(wavyId, mensagem);
-                        }
-                        else
-                        {
-                            Console.WriteLine("[AGREGADOR] AVISO: Não foi possível extrair wavyId da mensagem");
-                        }
+                        // Enviar diretamente para pré-processamento
+                        await ProcessarMensagemComPreProcessamento(mensagem, formato);
                     }
                     catch (Exception ex)
                     {
@@ -105,7 +109,7 @@ namespace Agregador
                 Timer statusTimer = new Timer(_ =>
                 {
                     int pendentes = ContarMensagensPendentes();
-                    Console.WriteLine($"[STATUS] Recebidas: {mensagensRecebidas} | Enviadas: {mensagensEnviadas} | Pendentes: {pendentes}");
+                    Console.WriteLine($"[STATUS] Recebidas: {mensagensRecebidas} | Enviadas: {mensagensEnviadas} | Erros: {errosProcessamento} | Pendentes: {pendentes}");
                 }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
                 // Comando manual para forçar envio
@@ -116,6 +120,244 @@ namespace Agregador
             catch (Exception ex)
             {
                 Console.WriteLine($"[RABBITMQ] ERRO: {ex.Message}");
+            }
+        }
+
+        static string DetectarFormato(string mensagem)
+        {
+            mensagem = mensagem.Trim();
+            if (mensagem.StartsWith("{") && mensagem.EndsWith("}"))
+                return "json";
+            else if (mensagem.StartsWith("<") && mensagem.EndsWith(">"))
+                return "xml";
+            else if (mensagem.Split(',').Length == 5 || mensagem.Split(',').Length == 6) // Accept both 5 and 6 fields
+                return "csv";
+            else if (mensagem.Contains("WAVY ID:") && mensagem.Contains("Tipo:"))
+                return "txt";
+            else
+                return "outro";
+        }
+
+        static async Task ProcessarMensagemComPreProcessamento(string mensagem, string formato)
+        {
+            if (rpcClient == null)
+            {
+                Console.WriteLine("[AGREGADOR] Pré-processamento não disponível, ignorando mensagem");
+                return;
+            }
+
+            try
+            {
+                // Enviar para pré-processamento com tipo padrão (será substituído depois)
+                Console.WriteLine($"[AGREGADOR] Enviando mensagem formato {formato} para pré-processamento");
+
+                var respostaRpc = await rpcClient.ProcessarDadosAsync(
+                    new DadosBrutos
+                    {
+                        Dados = mensagem,
+                        TipoProcessamento = "none" // Valor temporário
+                    });
+
+                Console.WriteLine($"[AGREGADOR] Resposta do pré-processamento: {respostaRpc.Dados}");
+
+                // Verificar se o pré-processamento foi bem-sucedido
+                using JsonDocument doc = JsonDocument.Parse(respostaRpc.Dados);
+                var root = doc.RootElement;
+
+                // Verificar se houve erro no pré-processamento
+                if (root.TryGetProperty("success", out var successProp) && !successProp.GetBoolean())
+                {
+                    string errorMsg = root.TryGetProperty("error", out var errorProp) ?
+                                     errorProp.GetString() ?? "Unknown error" : "Unknown error";
+                    Console.WriteLine($"[AGREGADOR] Erro no pré-processamento ({formato}): {errorMsg}");
+                    Interlocked.Increment(ref errosProcessamento);
+
+                    // Incrementar contador de erros por formato
+                    lock (errosPorFormato)
+                    {
+                        if (errosPorFormato.ContainsKey(formato))
+                            errosPorFormato[formato]++;
+                        else
+                            errosPorFormato["outro"]++;
+                    }
+
+                    // Tentar processar manualmente se for CSV (fallback)
+                    if (formato == "csv")
+                    {
+                        await ProcessarCSVManualmente(mensagem);
+                    }
+
+                    return;
+                }
+
+                // Extrair wavyId do resultado processado
+                if (!root.TryGetProperty("wavyId", out var wavyIdProp))
+                {
+                    Console.WriteLine("[AGREGADOR] Resposta do pré-processamento não contém wavyId");
+                    Interlocked.Increment(ref errosProcessamento);
+                    return;
+                }
+
+                string wavyId = wavyIdProp.GetString() ?? "";
+                if (string.IsNullOrEmpty(wavyId))
+                {
+                    Console.WriteLine("[AGREGADOR] wavyId vazio na resposta do pré-processamento");
+                    Interlocked.Increment(ref errosProcessamento);
+                    return;
+                }
+
+                // Obter configuração específica para este wavyId
+                ConfiguracaoWavy config;
+                lock (configLock)
+                {
+                    config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+                }
+
+                // Se o tipo de processamento for diferente do padrão, reprocessar com o tipo correto
+                if (config.PreProcessamento != "none")
+                {
+                    respostaRpc = await rpcClient.ProcessarDadosAsync(
+                        new DadosBrutos
+                        {
+                            Dados = mensagem,
+                            TipoProcessamento = config.PreProcessamento
+                        });
+                }
+
+                // Adicionar à fila de mensagens para este wavyId
+                await AdicionarAoBatch(wavyId, respostaRpc.Dados);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AGREGADOR] Erro ao processar com pré-processamento: {ex.Message}");
+                Interlocked.Increment(ref errosProcessamento);
+            }
+        }
+
+        // Método de fallback para processar CSV manualmente
+        static async Task ProcessarCSVManualmente(string mensagem)
+        {
+            try
+            {
+                Console.WriteLine("[AGREGADOR] Tentando processar CSV manualmente");
+                var partes = mensagem.Split(',');
+                if (partes.Length != 5)
+                {
+                    Console.WriteLine("[AGREGADOR] CSV inválido (não tem 5 campos)");
+                    return;
+                }
+
+                string wavyId = partes[0].Trim();
+                string tipo = partes[1].Trim();
+                string valor = partes[2].Trim();
+                string unidade = partes[3].Trim();
+                string hora = partes[4].Trim();
+
+                if (string.IsNullOrEmpty(wavyId))
+                {
+                    Console.WriteLine("[AGREGADOR] CSV com wavyId vazio");
+                    return;
+                }
+
+                // Criar JSON manualmente
+                var jsonObj = new
+                {
+                    wavyId = wavyId,
+                    tipo = tipo,
+                    valor = valor,
+                    unidade = unidade,
+                    hora = hora,
+                    processedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    success = true,
+                    processedManually = true
+                };
+
+                string jsonResult = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                Console.WriteLine($"[AGREGADOR] CSV processado manualmente: {jsonResult}");
+
+                // Obter configuração específica para este wavyId
+                ConfiguracaoWavy config;
+                lock (configLock)
+                {
+                    config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+                }
+
+                // Aplicar transformação conforme configuração
+                if (config.PreProcessamento != "none")
+                {
+                    switch (config.PreProcessamento)
+                    {
+                        case "uppercase":
+                            valor = valor.ToUpper();
+                            break;
+                        case "lowercase":
+                            valor = valor.ToLower();
+                            break;
+                        case "normalize":
+                            valor = valor.Trim().ToLower();
+                            break;
+                    }
+
+                    // Atualizar o JSON com o valor processado
+                    jsonObj = new
+                    {
+                        wavyId = wavyId,
+                        tipo = tipo,
+                        valor = valor,
+                        unidade = unidade,
+                        hora = hora,
+                        processedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        success = true,
+                        processedManually = true
+                    };
+
+                    jsonResult = JsonSerializer.Serialize(jsonObj, new JsonSerializerOptions
+                    {
+                        WriteIndented = true
+                    });
+                }
+
+                // Adicionar à fila de mensagens para este wavyId
+                await AdicionarAoBatch(wavyId, jsonResult);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AGREGADOR] Erro ao processar CSV manualmente: {ex.Message}");
+            }
+        }
+
+        static async Task AdicionarAoBatch(string wavyId, string dadosProcessados)
+        {
+            ConfiguracaoWavy config;
+            lock (configLock)
+            {
+                config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
+            }
+
+            lock (mensagensLock)
+            {
+                if (!mensagensPorWavy.ContainsKey(wavyId))
+                    mensagensPorWavy[wavyId] = new List<MensagemInfo>();
+
+                mensagensPorWavy[wavyId].Add(new MensagemInfo
+                {
+                    Dados = dadosProcessados,
+                    Hora = DateTime.Now.ToString("HH:mm:ss")
+                });
+
+                Console.WriteLine($"[AGREGADOR] {wavyId}: {mensagensPorWavy[wavyId].Count}/{config.VolumeDados} mensagens");
+
+                // Se atingiu o volume de dados configurado, enviar o lote
+                if (mensagensPorWavy[wavyId].Count >= config.VolumeDados)
+                {
+                    var mensagensParaEnviar = new List<MensagemInfo>(mensagensPorWavy[wavyId]);
+                    Task.Run(() => EnviarParaServidor(mensagensParaEnviar, config, wavyId));
+                    mensagensPorWavy[wavyId].Clear();
+                }
             }
         }
 
@@ -157,7 +399,15 @@ namespace Agregador
                 Console.WriteLine("\n=== STATUS DETALHADO ===");
                 Console.WriteLine($"Mensagens recebidas: {mensagensRecebidas}");
                 Console.WriteLine($"Mensagens enviadas: {mensagensEnviadas}");
-                Console.WriteLine($"Mensagens pendentes: {ContarMensagensPendentes()}");
+                Console.WriteLine($"Erros de processamento: {errosProcessamento}");
+
+                Console.WriteLine("\nErros por formato:");
+                foreach (var kvp in errosPorFormato)
+                {
+                    Console.WriteLine($"  {kvp.Key}: {kvp.Value}");
+                }
+
+                Console.WriteLine($"\nMensagens pendentes: {ContarMensagensPendentes()}");
                 Console.WriteLine("\nMensagens por WAVY:");
 
                 foreach (var kvp in mensagensPorWavy)
@@ -220,29 +470,9 @@ namespace Agregador
                 string diretorioAtual = Directory.GetCurrentDirectory();
                 string diretorioExecutavel = AppDomain.CurrentDomain.BaseDirectory;
 
-                Console.WriteLine($"[DEBUG] Diretório atual: {diretorioAtual}");
-                Console.WriteLine($"[DEBUG] Diretório do executável: {diretorioExecutavel}");
-
-                Console.WriteLine("[DEBUG] Arquivos no diretório atual:");
-                var arquivos = Directory.GetFiles(diretorioAtual);
-                foreach (var arquivo in arquivos)
-                {
-                    Console.WriteLine($"[DEBUG] - {Path.GetFileName(arquivo)}");
-                }
-
-                if (diretorioAtual != diretorioExecutavel)
-                {
-                    Console.WriteLine("[DEBUG] Arquivos no diretório do executável:");
-                    var arquivosExec = Directory.GetFiles(diretorioExecutavel);
-                    foreach (var arquivo in arquivosExec)
-                    {
-                        Console.WriteLine($"[DEBUG] - {Path.GetFileName(arquivo)}");
-                    }
-                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DEBUG] Erro ao listar arquivos: {ex.Message}");
             }
         }
 
@@ -261,18 +491,15 @@ namespace Agregador
                 string caminhoEncontrado = null;
                 foreach (var caminho in caminhosPossiveis)
                 {
-                    Console.WriteLine($"[CONFIG] Tentando: {caminho}");
                     if (File.Exists(caminho))
                     {
                         caminhoEncontrado = caminho;
-                        Console.WriteLine($"[CONFIG] Arquivo encontrado em: {caminho}");
                         break;
                     }
                 }
 
                 if (caminhoEncontrado == null)
                 {
-                    Console.WriteLine($"[CONFIG] Arquivo {nomeArquivo} não encontrado em nenhum local, criando arquivo padrão...");
                     CriarArquivoConfigPadrao(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, nomeArquivo));
                     return;
                 }
@@ -280,7 +507,6 @@ namespace Agregador
                 var novasConfigs = new Dictionary<string, ConfiguracaoWavy>();
                 var linhas = File.ReadAllLines(caminhoEncontrado);
 
-                Console.WriteLine($"[CONFIG] Lendo {linhas.Length} linhas do arquivo");
 
                 foreach (var linha in linhas)
                 {
@@ -297,21 +523,17 @@ namespace Agregador
                             VolumeDados = int.TryParse(partes[2].Trim(), out int v) ? v : 3,
                             Servidor = partes[3].Trim()
                         };
-                        Console.WriteLine($"[CONFIG] {wavyId}: PreProc={partes[1].Trim()}, Volume={partes[2].Trim()}, Servidor={partes[3].Trim()}");
                     }
                     else
                     {
-                        Console.WriteLine($"[CONFIG] Linha inválida ignorada: {linha}");
                     }
                 }
 
                 lock (configLock) configuracoes = novasConfigs;
-                Console.WriteLine($"[CONFIG] Recarregado com sucesso - {novasConfigs.Count} configurações ativas");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[CONFIG] Erro: {ex.Message}");
-                Console.WriteLine($"[CONFIG] StackTrace: {ex.StackTrace}");
             }
         }
 
@@ -323,10 +545,10 @@ namespace Agregador
                 configPadrao.AppendLine("# Arquivo de configuração do Agregador");
                 configPadrao.AppendLine("# Formato: wavyId:preProcessamento:volumeDados:servidor");
                 configPadrao.AppendLine("WAVY_001:none:3:localhost");
-                configPadrao.AppendLine("WAVY_002:filtro:5:localhost");
-                configPadrao.AppendLine("WAVY_003:normalizacao:2:localhost");
+                configPadrao.AppendLine("WAVY_002:uppercase:5:localhost");
+                configPadrao.AppendLine("WAVY_003:normalize:2:localhost");
                 configPadrao.AppendLine("WAVY_004:none:4:localhost");
-                configPadrao.AppendLine("WAVY_005:none:3:localhost");
+                configPadrao.AppendLine("WAVY_005:lowercase:3:localhost");
 
                 File.WriteAllText(caminho, configPadrao.ToString());
                 Console.WriteLine($"[CONFIG] Arquivo padrão criado em: {caminho}");
@@ -337,54 +559,6 @@ namespace Agregador
             catch (Exception ex)
             {
                 Console.WriteLine($"[CONFIG] Erro ao criar arquivo padrão: {ex.Message}");
-            }
-        }
-
-        static async Task ProcessarMensagem(string wavyId, string message)
-        {
-            ConfiguracaoWavy config;
-            lock (configLock)
-            {
-                config = configuracoes.ContainsKey(wavyId) ? configuracoes[wavyId] : new ConfiguracaoWavy();
-                if (!configuracoes.ContainsKey(wavyId))
-                {
-                    Console.WriteLine($"[CONFIG] Usando configuração padrão para {wavyId}");
-                }
-            }
-
-            string dadosProcessados = message;
-
-            // Tentar pré-processamento se disponível
-            if (rpcClient != null)
-            {
-                try
-                {
-                    var respostaRpc = await rpcClient.ProcessarDadosAsync(new DadosBrutos { Dados = message, TipoProcessamento = config.PreProcessamento });
-                    dadosProcessados = respostaRpc.Dados;
-                    Console.WriteLine($"[RPC] Dados processados para {wavyId}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[RPC] Erro para {wavyId}: {ex.Message} - usando dados originais");
-                    dadosProcessados = message;
-                }
-            }
-
-            lock (mensagensLock)
-            {
-                if (!mensagensPorWavy.ContainsKey(wavyId))
-                    mensagensPorWavy[wavyId] = new List<MensagemInfo>();
-
-                mensagensPorWavy[wavyId].Add(new MensagemInfo { Dados = dadosProcessados, Hora = DateTime.Now.ToString("HH:mm:ss") });
-
-                Console.WriteLine($"[AGREGADOR] {wavyId}: {mensagensPorWavy[wavyId].Count}/{config.VolumeDados} mensagens");
-
-                if (mensagensPorWavy[wavyId].Count >= config.VolumeDados)
-                {
-                    var mensagensParaEnviar = new List<MensagemInfo>(mensagensPorWavy[wavyId]);
-                    Task.Run(() => EnviarParaServidor(mensagensParaEnviar, config, wavyId));
-                    mensagensPorWavy[wavyId].Clear();
-                }
             }
         }
 
@@ -439,48 +613,6 @@ namespace Agregador
             }
 
             Console.WriteLine($"[ENVIAR] {wavyId}: {sucessos}/{mensagens.Count} mensagens enviadas com sucesso");
-        }
-
-        static string ExtrairWavyId(string mensagem)
-        {
-            try
-            {
-                // Tentar JSON primeiro
-                if (mensagem.Trim().StartsWith("{"))
-                {
-                    using var doc = JsonDocument.Parse(mensagem);
-                    return doc.RootElement.GetProperty("wavyId").GetString() ?? "";
-                }
-
-                // Tentar CSV
-                if (mensagem.Contains(","))
-                {
-                    var partes = mensagem.Split(',');
-                    if (partes.Length >= 1) return partes[0];
-                }
-
-                // Tentar TXT
-                if (mensagem.Contains("WAVY ID:"))
-                {
-                    var inicio = mensagem.IndexOf("WAVY ID:") + 8;
-                    var fim = mensagem.IndexOf(" ", inicio);
-                    if (fim == -1) fim = mensagem.IndexOf("|", inicio);
-                    if (fim > inicio) return mensagem.Substring(inicio, fim - inicio).Trim();
-                }
-
-                // Tentar XML
-                if (mensagem.Contains("<wavyId>"))
-                {
-                    var inicio = mensagem.IndexOf("<wavyId>") + 8;
-                    var fim = mensagem.IndexOf("</wavyId>", inicio);
-                    if (fim > inicio) return mensagem.Substring(inicio, fim - inicio);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERRO] Ao extrair wavyId: {ex.Message}");
-            }
-            return "";
         }
     }
 }

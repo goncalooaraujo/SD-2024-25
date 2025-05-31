@@ -3,14 +3,6 @@
     "Name": "Novo Perfil",
     "Projects": [
       {
-        "Path": "Trabalho1\\Wavy.csproj",
-        "Action": "Start"
-      },
-      {
-        "Path": "Agregador\\Agregador.csproj",
-        "Action": "Start"
-      },
-      {
         "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
         "Action": "Start"
       },
@@ -20,6 +12,14 @@
       },
       {
         "Path": "AnaliseRpc\\AnaliseRpc.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Agregador\\Agregador.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Trabalho1\\Wavy.csproj",
         "Action": "Start"
       }
     ]
