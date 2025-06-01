@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AnaliseRpc", "AnaliseRpc\An
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data", "data", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 EndProject
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "Analise", "Analise\Analise.pyproj", "{F23AA205-E23A-49C2-969C-6C7C3AEB096F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -99,6 +101,12 @@ Global
 		{A1274282-3E01-438D-92C1-D19233E2373A}.Release|x64.Build.0 = Release|Any CPU
 		{A1274282-3E01-438D-92C1-D19233E2373A}.Release|x86.ActiveCfg = Release|Any CPU
 		{A1274282-3E01-438D-92C1-D19233E2373A}.Release|x86.Build.0 = Release|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Release|x64.ActiveCfg = Release|Any CPU
+		{F23AA205-E23A-49C2-969C-6C7C3AEB096F}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

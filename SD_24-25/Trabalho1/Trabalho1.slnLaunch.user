@@ -11,8 +11,8 @@
         "Action": "Start"
       },
       {
-        "Path": "AnaliseRpc\\AnaliseRpc.csproj",
-        "Action": "Start"
+        "Path": "Analise\\Analise.pyproj",
+        "Action": "StartWithoutDebugging"
       },
       {
         "Path": "Agregador\\Agregador.csproj",
