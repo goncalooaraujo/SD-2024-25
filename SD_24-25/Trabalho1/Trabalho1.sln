@@ -17,6 +17,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AnaliseRpc", "AnaliseRpc\An
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data", "data", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ServicoAnalisePython", "ServicoAnalisePython", "{DFDC37B8-12D0-4E29-A2FA-18808EC7FF02}"
+	ProjectSection(SolutionItems) = preProject
+		AnaliseRpc\proto\analise.proto = AnaliseRpc\proto\analise.proto
+		AnaliseRpc\analise_pb2.py = AnaliseRpc\analise_pb2.py
+		AnaliseRpc\analise_pb2_grpc.py = AnaliseRpc\analise_pb2_grpc.py
+		servidor.py = servidor.py
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

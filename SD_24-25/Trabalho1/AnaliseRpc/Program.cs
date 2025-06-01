@@ -25,9 +25,6 @@ builder.Services.AddCors(o => o.AddPolicy("AllowAll", policy =>
 
 var app = builder.Build();
 
-// ✅ Mapear o serviço gRPC para análise
-app.MapGrpcService<AnaliseService>();
-
 // 🔎 Endpoint simples para debugging
 app.MapGet("/", () => "✅ Serviço Analise RPC ativo em /grpc na porta 50052.");
 

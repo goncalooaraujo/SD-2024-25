@@ -24,6 +24,9 @@
 		<Protobuf Include="..\AnaliseRpc\Protos\analise.proto" GrpcServices="Client" Link="Protos\analise.proto">
 			<Access>Public</Access>
 		</Protobuf>
+	
+	<Protobuf Include="..\AnaliseRpc\Protos\analise.proto" GrpcServices="Client" />
+
 	</ItemGroup>
 
 	<ItemGroup>
