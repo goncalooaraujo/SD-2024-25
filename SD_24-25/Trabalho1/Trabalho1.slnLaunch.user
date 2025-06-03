@@ -7,12 +7,12 @@
         "Action": "Start"
       },
       {
-        "Path": "Server\\Server.csproj",
+        "Path": "Analise\\Analise.pyproj",
         "Action": "Start"
       },
       {
-        "Path": "Analise\\Analise.pyproj",
-        "Action": "StartWithoutDebugging"
+        "Path": "Server\\Server.csproj",
+        "Action": "Start"
       },
       {
         "Path": "Agregador\\Agregador.csproj",

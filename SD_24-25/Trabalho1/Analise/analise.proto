@@ -8,7 +8,6 @@ service Analise {
   }
   rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo) {
     option idempotency_level = NO_SIDE_EFFECTS;
-    option wait_for_ready = true;
   }
 }
 
@@ -28,7 +27,9 @@ message ResultadoAnalise {
 message TipoMedia {
   string tipo = 1;
   double media = 2;
-  int32 total_amostras = 3;
+  double min_valor = 3;
+  double max_valor = 4;
+  int32 total_amostras = 5;
 }
 
 message ResultadoAnalisePorTipo {
