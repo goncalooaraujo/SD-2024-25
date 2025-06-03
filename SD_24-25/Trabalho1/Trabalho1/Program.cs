@@ -16,6 +16,9 @@ namespace Wavy
         static Dictionary<string, Dictionary<string, double>> estadoSensores = new Dictionary<string, Dictionary<string, double>>();
         static readonly object estadoLock = new object();
 
+        static readonly DateTime dataInicial = new DateTime(2000, 1, 1);
+        static readonly DateTime dataFinal = DateTime.Now;
+
         static void Main(string[] args)
         {
             Console.Write("Quantas WAVYs queres simular? ");
@@ -25,7 +28,7 @@ namespace Wavy
                 return;
             }
 
-            Console.WriteLine($"Iniciando {quantidade} WAVY(s) com valores realistas...");
+            Console.WriteLine($"Iniciando {quantidade} WAVY(s)...");
 
             for (int i = 0; i < quantidade; i++)
             {
@@ -38,8 +41,6 @@ namespace Wavy
                 Thread.Sleep(100);
             }
 
-            Console.WriteLine("Pressione qualquer tecla para parar...");
-            Console.ReadKey();
         }
 
         static void InicializarEstadoSensor(string wavyId)
@@ -72,14 +73,18 @@ namespace Wavy
                 {
                     string tipo = tipos[random.Next(tipos.Length)];
                     (double valor, string unidade) = GerarCaracteristicaRealista(wavyId, tipo);
-                    string hora = DateTime.Now.ToString("HH:mm:ss");
+
+                    // Gerar data aleatória dentro do intervalo configurado
+                    DateTime dataAleatoria = GerarDataAleatoria();
+                    string dataFormatada = dataAleatoria.ToString("dd/MM/yyyy");
+
                     string formato = formatos[random.Next(formatos.Length)];
-                    string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
+                    string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, dataFormatada, dataAleatoria);
 
                     var body = Encoding.UTF8.GetBytes(mensagem);
                     channel.BasicPublish(exchange: "sensores", routingKey: tipo, basicProperties: null, body: body);
 
-                    Console.WriteLine($"[{wavyId}] #{i + 1} Publicado ({formato}) {tipo}: {valor:F2} {unidade}");
+                    Console.WriteLine($"[{wavyId}] #{i + 1} Publicado ({formato}) {tipo}: {valor:F2} {unidade} em {dataFormatada}");
 
                     // Intervalo aleatório entre 800ms e 3000ms para simular variação real
                     Thread.Sleep(random.Next(800, 3000));
@@ -91,6 +96,21 @@ namespace Wavy
             {
                 Console.WriteLine($"[{wavyId}] ERRO: {ex.Message}");
             }
+        }
+
+        static DateTime GerarDataAleatoria()
+        {
+            // Calcular intervalo total em ticks
+            long intervaloTicks = dataFinal.Ticks - dataInicial.Ticks;
+
+            // Gerar um número aleatório de ticks dentro do intervalo
+            long ticksAleatorios = (long)(random.NextDouble() * intervaloTicks);
+
+            // Criar data aleatória
+            DateTime dataAleatoria = new DateTime(dataInicial.Ticks + ticksAleatorios);
+
+            // Retornar apenas a data (sem a hora)
+            return dataAleatoria.Date;
         }
 
         static (double, string) GerarCaracteristicaRealista(string wavyId, string tipo)
@@ -180,7 +200,7 @@ namespace Wavy
             }
         }
 
-        static string GerarMensagem(string formato, string wavyId, string tipo, double valor, string unidade, string hora)
+        static string GerarMensagem(string formato, string wavyId, string tipo, double valor, string unidade, string data, DateTime timestamp)
         {
             // Adicionar algumas variações no formato dos dados
             string valorFormatado = valor.ToString("F2").Replace(",", ".");
@@ -195,17 +215,20 @@ namespace Wavy
                 valorFormatado = valor.ToString("F1").Replace(",", ".");
             }
 
+            // Usar timestamp da data aleatória em vez da data atual
+            long unixTimestamp = new DateTimeOffset(timestamp).ToUnixTimeSeconds();
+
             return formato.ToLower() switch
             {
-                "json" => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""hora"":""{hora}"",""timestamp"":{DateTimeOffset.Now.ToUnixTimeSeconds()}}}",
+                "json" => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""data"":""{data}"",""timestamp"":{unixTimestamp}}}",
 
-                "csv" => $"{wavyId},{tipo},{valorFormatado},{unidade},{hora},{DateTime.Now:yyyy-MM-dd}",
+                "csv" => $"{wavyId},{tipo},{valorFormatado},{unidade},{data}",
 
-                "xml" => $@"<mensagem><wavyId>{wavyId}</wavyId><tipo>{tipo}</tipo><valor>{valorFormatado}</valor><unidade>{unidade}</unidade><hora>{hora}</hora><data>{DateTime.Now:yyyy-MM-dd}</data></mensagem>",
+                "xml" => $@"<mensagem><wavyId>{wavyId}</wavyId><tipo>{tipo}</tipo><valor>{valorFormatado}</valor><unidade>{unidade}</unidade><data>{data}</data></mensagem>",
 
-                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valorFormatado} {unidade} | Hora: {hora} | Data: {DateTime.Now:dd/MM/yyyy}",
+                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valorFormatado} {unidade} | Data: {data}",
 
-                _ => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""hora"":""{hora}""}}"
+                _ => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""data"":""{data}""}}"
             };
         }
     }

@@ -1,37 +1,22 @@
 syntax = "proto3";
 
-package analise;
-
 service Analise {
-  rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise) {
-    option idempotency_level = NO_SIDE_EFFECTS;
-  }
-  rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo) {
-    option idempotency_level = NO_SIDE_EFFECTS;
-  }
+    rpc AnalisarDadosPorTipo(DadosParaAnalise) returns (ResultadoAnalisePorTipo);
 }
 
 message DadosParaAnalise {
-  string wavy_id = 1;
-  string tipo = 2;
-  string data_inicio = 3;
-  string data_fim = 4;
-}
-
-message ResultadoAnalise {
-  double media = 1;
-  int32 total_amostras = 2;
-  string resumo = 3;
+    string search_value = 1;
+    string search_type = 2;  // "wavy", "tipo", or "both"
 }
 
 message TipoMedia {
-  string tipo = 1;
-  double media = 2;
-  double min_valor = 3;
-  double max_valor = 4;
-  int32 total_amostras = 5;
+    string tipo = 1;
+    double media = 2;
+    double min_valor = 3;
+    double max_valor = 4;
+    int32 total_amostras = 5;
 }
 
 message ResultadoAnalisePorTipo {
-  repeated TipoMedia medias_por_tipo = 1;
+    repeated TipoMedia medias_por_tipo = 1;
 }
