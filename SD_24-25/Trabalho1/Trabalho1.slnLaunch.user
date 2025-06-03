@@ -3,15 +3,23 @@
     "Name": "Novo Perfil",
     "Projects": [
       {
-        "Path": "Trabalho1\\Wavy.csproj",
+        "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
         "Action": "Start"
+      },
+      {
+        "Path": "Server\\Server.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "Analise\\Analise.pyproj",
+        "Action": "StartWithoutDebugging"
       },
       {
         "Path": "Agregador\\Agregador.csproj",
         "Action": "Start"
       },
       {
-        "Path": "PreProcessamentoRpc\\PreProcessamentoRpc.csproj",
+        "Path": "Trabalho1\\Wavy.csproj",
         "Action": "Start"
       }
     ]

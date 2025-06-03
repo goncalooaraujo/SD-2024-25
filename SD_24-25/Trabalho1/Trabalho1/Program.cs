@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using RabbitMQ.Client;
+using System.Collections.Generic;
 
 namespace Wavy
 {
@@ -11,6 +11,10 @@ namespace Wavy
         static readonly string[] tipos = { "temperatura", "pressao", "salinidade", "corrente" };
         static readonly string[] formatos = { "json", "csv", "xml", "txt" };
         static readonly Random random = new Random();
+
+        // Dicionário para manter estado dos sensores (simular tendências)
+        static Dictionary<string, Dictionary<string, double>> estadoSensores = new Dictionary<string, Dictionary<string, double>>();
+        static readonly object estadoLock = new object();
 
         static void Main(string[] args)
         {
@@ -21,100 +25,187 @@ namespace Wavy
                 return;
             }
 
+            Console.WriteLine($"Iniciando {quantidade} WAVY(s) com valores realistas...");
+
             for (int i = 0; i < quantidade; i++)
             {
                 string wavyId = $"WAVY_{i + 1:D3}";
+                InicializarEstadoSensor(wavyId);
                 Thread wavyThread = new Thread(() => IniciarWavy(wavyId));
                 wavyThread.Start();
+
+                // Pequena pausa para evitar sobrecarga inicial
+                Thread.Sleep(100);
+            }
+
+            Console.WriteLine("Pressione qualquer tecla para parar...");
+            Console.ReadKey();
+        }
+
+        static void InicializarEstadoSensor(string wavyId)
+        {
+            lock (estadoLock)
+            {
+                estadoSensores[wavyId] = new Dictionary<string, double>
+                {
+                    ["temperatura"] = 18 + random.NextDouble() * 6, // 18-24°C inicial
+                    ["pressao"] = 1010 + random.Next(30), // 1010-1040 hPa inicial
+                    ["salinidade"] = 32 + random.NextDouble() * 3, // 32-35 PSU inicial
+                    ["corrente"] = random.NextDouble() * 1.5 // 0-1.5 m/s inicial
+                };
             }
         }
 
         static void IniciarWavy(string wavyId)
         {
-            var factory = new ConnectionFactory() { HostName = "localhost" };
-
             try
             {
+                var factory = new ConnectionFactory() { HostName = "localhost" };
                 using var connection = factory.CreateConnection();
                 using var channel = connection.CreateModel();
 
-                string exchangeName = "sensores";
-                channel.ExchangeDeclare(exchange: exchangeName, type: ExchangeType.Topic);
+                channel.ExchangeDeclare(exchange: "sensores", type: ExchangeType.Topic);
 
-                Console.WriteLine($"[{wavyId}] Conectado a RabbitMQ, a publicar no exchange '{exchangeName}'.");
+                Console.WriteLine($"[{wavyId}] Iniciado - enviando dados realistas...");
 
                 for (int i = 0; i < 10; i++)
                 {
                     string tipo = tipos[random.Next(tipos.Length)];
-                    (double valor, string unidade) = GerarCaracteristica(tipo);
+                    (double valor, string unidade) = GerarCaracteristicaRealista(wavyId, tipo);
                     string hora = DateTime.Now.ToString("HH:mm:ss");
-
                     string formato = formatos[random.Next(formatos.Length)];
                     string mensagem = GerarMensagem(formato, wavyId, tipo, valor, unidade, hora);
 
                     var body = Encoding.UTF8.GetBytes(mensagem);
-                    string routingKey = tipo; // publicamos no tópico "temperatura", "pressao", etc.
+                    channel.BasicPublish(exchange: "sensores", routingKey: tipo, basicProperties: null, body: body);
 
-                    channel.BasicPublish(exchange: exchangeName,
-                                         routingKey: routingKey,
-                                         basicProperties: null,
-                                         body: body);
+                    Console.WriteLine($"[{wavyId}] #{i + 1} Publicado ({formato}) {tipo}: {valor:F2} {unidade}");
 
-                    Console.WriteLine($"[{wavyId}] Mensagem {i + 1} ({formato.ToUpper()}) publicada no tópico '{routingKey}':\n{mensagem}\n");
-
-                    Thread.Sleep(1000);
+                    // Intervalo aleatório entre 800ms e 3000ms para simular variação real
+                    Thread.Sleep(random.Next(800, 3000));
                 }
 
-                // Enviar mensagem de fim (em JSON, no tópico "fim")
-                string fimMensagem = GerarMensagem("json", wavyId, "fim", 0, "", DateTime.Now.ToString("HH:mm:ss"));
-                byte[] fimBody = Encoding.UTF8.GetBytes(fimMensagem);
-                channel.BasicPublish(exchange: exchangeName, routingKey: "fim", basicProperties: null, body: fimBody);
-                Console.WriteLine($"[{wavyId}] Mensagem de término publicada no tópico 'fim'.");
+                Console.WriteLine($"[{wavyId}] Concluído - 10 mensagens enviadas");
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine($"[{wavyId}] Erro ao publicar no RabbitMQ: {e.Message}");
+                Console.WriteLine($"[{wavyId}] ERRO: {ex.Message}");
+            }
+        }
+
+        static (double, string) GerarCaracteristicaRealista(string wavyId, string tipo)
+        {
+            lock (estadoLock)
+            {
+                double valorAtual = estadoSensores[wavyId][tipo];
+                double novoValor;
+                string unidade;
+
+                switch (tipo)
+                {
+                    case "temperatura":
+                        // Temperatura oceânica: 5°C a 30°C com flutuações graduais
+                        double deltaTemp = (random.NextDouble() - 0.5) * 2; // -1 a +1°C de variação
+                        novoValor = Math.Max(5, Math.Min(30, valorAtual + deltaTemp));
+
+                        // Ocasionalmente, mudanças mais bruscas (correntes, profundidade)
+                        if (random.NextDouble() < 0.1) // 10% chance
+                        {
+                            novoValor += (random.NextDouble() - 0.5) * 8; // -4 a +4°C adicional
+                            novoValor = Math.Max(5, Math.Min(30, novoValor));
+                        }
+
+                        unidade = "°C";
+                        break;
+
+                    case "pressao":
+                        // Pressão atmosférica: 980 a 1050 hPa
+                        double deltaPressao = (random.NextDouble() - 0.5) * 6; // -3 a +3 hPa
+                        novoValor = Math.Max(980, Math.Min(1050, valorAtual + deltaPressao));
+
+                        // Sistemas meteorológicos podem causar mudanças maiores
+                        if (random.NextDouble() < 0.05) // 5% chance
+                        {
+                            novoValor += (random.NextDouble() - 0.5) * 40; // -20 a +20 hPa adicional
+                            novoValor = Math.Max(980, Math.Min(1050, novoValor));
+                        }
+
+                        unidade = "hPa";
+                        break;
+
+                    case "salinidade":
+                        // Salinidade oceânica: 28 a 38 PSU
+                        double deltaSalinidade = (random.NextDouble() - 0.5) * 0.8; // -0.4 a +0.4 PSU
+                        novoValor = Math.Max(28, Math.Min(38, valorAtual + deltaSalinidade));
+
+                        // Influência de chuva ou evaporação intensa
+                        if (random.NextDouble() < 0.08) // 8% chance
+                        {
+                            novoValor += (random.NextDouble() - 0.5) * 4; // -2 a +2 PSU adicional
+                            novoValor = Math.Max(28, Math.Min(38, novoValor));
+                        }
+
+                        unidade = "PSU";
+                        break;
+
+                    case "corrente":
+                        // Velocidade da corrente: 0 a 3 m/s
+                        double deltaCorrente = (random.NextDouble() - 0.5) * 0.6; // -0.3 a +0.3 m/s
+                        novoValor = Math.Max(0, Math.Min(3, valorAtual + deltaCorrente));
+
+                        // Correntes podem ter picos devido a marés ou tempestades
+                        if (random.NextDouble() < 0.12) // 12% chance
+                        {
+                            novoValor += random.NextDouble() * 1.5; // 0 a +1.5 m/s adicional
+                            novoValor = Math.Min(3, novoValor);
+                        }
+
+                        unidade = "m/s";
+                        break;
+
+                    default:
+                        novoValor = 0;
+                        unidade = "";
+                        break;
+                }
+
+                // Atualizar estado do sensor
+                estadoSensores[wavyId][tipo] = novoValor;
+
+                // Adicionar pequeno ruído de sensor (±0.1% do valor)
+                double ruido = novoValor * (random.NextDouble() - 0.5) * 0.002;
+                novoValor += ruido;
+
+                return (novoValor, unidade);
             }
         }
 
         static string GerarMensagem(string formato, string wavyId, string tipo, double valor, string unidade, string hora)
         {
+            // Adicionar algumas variações no formato dos dados
+            string valorFormatado = valor.ToString("F2").Replace(",", ".");
+
+            // Ocasionalmente usar mais ou menos casas decimais
+            if (random.NextDouble() < 0.3) // 30% chance
+            {
+                valorFormatado = valor.ToString("F3").Replace(",", ".");
+            }
+            else if (random.NextDouble() < 0.1) // 10% chance
+            {
+                valorFormatado = valor.ToString("F1").Replace(",", ".");
+            }
+
             return formato.ToLower() switch
             {
-                "json" => JsonSerializer.Serialize(new
-                {
-                    wavyId,
-                    tipo,
-                    valor = valor.ToString("F2").Replace(",", "."),
-                    unidade,
-                    hora
-                }),
+                "json" => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""hora"":""{hora}"",""timestamp"":{DateTimeOffset.Now.ToUnixTimeSeconds()}}}",
 
-                "csv" => $"{wavyId},{tipo},{valor.ToString("F2").Replace(",", ".")},{unidade},{hora}",
+                "csv" => $"{wavyId},{tipo},{valorFormatado},{unidade},{hora},{DateTime.Now:yyyy-MM-dd}",
 
-                "xml" => $@"<mensagem>
-    <wavyId>{wavyId}</wavyId>
-    <tipo>{tipo}</tipo>
-    <valor>{valor.ToString("F2").Replace(",", ".")}</valor>
-    <unidade>{unidade}</unidade>
-    <hora>{hora}</hora>
-</mensagem>",
+                "xml" => $@"<mensagem><wavyId>{wavyId}</wavyId><tipo>{tipo}</tipo><valor>{valorFormatado}</valor><unidade>{unidade}</unidade><hora>{hora}</hora><data>{DateTime.Now:yyyy-MM-dd}</data></mensagem>",
 
-                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valor:F2} {unidade} | Hora: {hora}",
+                "txt" => $"WAVY ID: {wavyId} | Tipo: {tipo} | Valor: {valorFormatado} {unidade} | Hora: {hora} | Data: {DateTime.Now:dd/MM/yyyy}",
 
-                _ => "{}"
-            };
-        }
-
-        static (double valor, string unidade) GerarCaracteristica(string tipo)
-        {
-            return tipo switch
-            {
-                "temperatura" => (15 + random.NextDouble() * 10, "C"),
-                "pressao" => (1000 + random.Next(50), "hPa"),
-                "salinidade" => (30 + random.NextDouble() * 5, "PSU"),
-                "corrente" => (random.NextDouble() * 2, "m/s"),
-                _ => (0, "")
+                _ => $@"{{""wavyId"":""{wavyId}"",""tipo"":""{tipo}"",""valor"":{valorFormatado},""unidade"":""{unidade}"",""hora"":""{hora}""}}"
             };
         }
     }

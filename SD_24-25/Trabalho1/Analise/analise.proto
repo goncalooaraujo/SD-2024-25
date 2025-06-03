@@ -1,12 +1,15 @@
 syntax = "proto3";
 
-option csharp_namespace = "AnaliseRpc";
-
 package analise;
 
 service Analise {
-  rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise);
-  rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo);
+  rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+    option wait_for_ready = true;
+  }
 }
 
 message DadosParaAnalise {

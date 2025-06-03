@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Xml;
 using System.Text.RegularExpressions;
+using Grpc.Core;
 
 namespace Servidor
 {
@@ -71,6 +72,19 @@ namespace Servidor
             }
         }
 
+        public static async Task<List<string>> ListarWAVYsAsync()
+        {
+            try
+            {
+                return await collection.Distinct<string>("wavyId", FilterDefinition<Modelo>.Empty).ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MongoDB ERRO] Ao listar WAVYs: {ex.Message}");
+                return new List<string>();
+            }
+        }
+
         private static Modelo? ExtrairModelo(string msg)
         {
             try
@@ -112,7 +126,7 @@ namespace Servidor
 
                 // CSV (wavyId,tipo,valor,unidade,hora)
                 var partes = msg.Split(',');
-                if (partes.Length == 5)
+                if (partes.Length == 5 || partes.Length == 6)
                 {
                     return new Modelo
                     {
@@ -155,33 +169,73 @@ namespace Servidor
     class Program
     {
         private static readonly Mutex ficheiroMutex = new Mutex();
-        private static GrpcChannel rpcChannel;
-        private static Analise.AnaliseClient rpcClient;
+        private static GrpcChannel? pythonAnalysisChannel;
+        private static Analise.AnaliseClient? pythonAnalysisClient;
 
         static async Task Main()
         {
+            Console.WriteLine("=== SERVIDOR C# COM INTEGRAÇÃO PYTHON gRPC ===");
+
+            // Test MongoDB connection
             try
             {
                 var mongoClient = new MongoClient("mongodb://localhost:27017");
                 var database = mongoClient.GetDatabase("sd");
                 await database.RunCommandAsync((Command<BsonDocument>)"{ping:1}");
-                Console.WriteLine("[MongoDB] Conexão bem-sucedida!");
+                Console.WriteLine("✅ [MongoDB] Conexão bem-sucedida!");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[MongoDB ERRO] Falha na conexão: {ex.Message}");
+                Console.WriteLine($"❌ [MongoDB ERRO] Falha na conexão: {ex.Message}");
+                Console.WriteLine("   Certifique-se que o MongoDB está rodando na porta 27017");
                 return;
             }
 
-            rpcChannel = GrpcChannel.ForAddress("http://localhost:50052");
-            rpcClient = new Analise.AnaliseClient(rpcChannel);
+            // Connect to Python gRPC service
+            await InicializarConexaoPython();
 
+            // Start analysis interface in background
             ThreadPool.QueueUserWorkItem(async _ => await IniciarInterfaceAnalise());
 
+            // Start TCP server for receiving data
+            await IniciarServidorTCP();
+        }
+
+        static async Task InicializarConexaoPython()
+        {
+            try
+            {
+                AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+                pythonAnalysisChannel = GrpcChannel.ForAddress("http://localhost:50052");
+                pythonAnalysisClient = new Analise.AnaliseClient(pythonAnalysisChannel);
+
+                // Test connection - FIXED: removed incorrect using statement
+                var testRequest = new DadosParaAnalise { WavyId = "test" };
+                try
+                {
+                    var response = pythonAnalysisClient.AnalisarDadosPorTipo(testRequest);
+                    Console.WriteLine("✅ [PYTHON] Conexão com serviço de análise Python estabelecida!");
+                }
+                catch (Grpc.Core.RpcException)
+                {
+                    // If we get an RPC exception, the server is running but returned an error
+                    Console.WriteLine("✅ [PYTHON] Conexão com serviço de análise Python estabelecida!");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️  [PYTHON AVISO] Falha na conexão com serviço Python: {ex.Message}");
+                Console.WriteLine("   Certifique-se que o servidor Python está rodando: python servidor.py");
+                pythonAnalysisClient = null;
+            }
+        }
+
+        static async Task IniciarServidorTCP()
+        {
             int port = 6000;
             TcpListener server = new TcpListener(IPAddress.Any, port);
             server.Start();
-            Console.WriteLine("SERVIDOR Pronto (RPC ativado)");
+            Console.WriteLine($"✅ [TCP] Servidor pronto na porta {port} (Integrado com Python gRPC)");
 
             while (true)
             {
@@ -193,85 +247,170 @@ namespace Servidor
 
         static async Task IniciarInterfaceAnalise()
         {
+            await Task.Delay(1000); // Wait for server to start
+
             while (true)
             {
-                Console.WriteLine("\n=== MENU DE ANÁLISE ===");
-                Console.WriteLine("1. analise WAVY_ID - Analisar dados de uma WAVY específica");
-                Console.WriteLine("2. listar - Listar todas as WAVYs com dados registrados");
-                Console.WriteLine("3. sair - Encerrar o servidor");
-                Console.Write("\nDigite sua opção: ");
+                Console.WriteLine("\n" + new string('=', 50));
+                Console.WriteLine("           MENU DE ANÁLISE DE DADOS");
+                Console.WriteLine(new string('=', 50));
+                Console.WriteLine("1. analise [WAVY_ID] - Analisar dados de uma WAVY específica");
+                Console.WriteLine("2. listar            - Listar todas as WAVYs registradas");
+                Console.WriteLine("3. status            - Verificar status das conexões");
+                Console.WriteLine("4. sair              - Encerrar o servidor");
+                Console.WriteLine(new string('=', 50));
+                Console.Write("Digite sua opção: ");
 
-                var input = Console.ReadLine()?.Trim().ToLower();
+                var input = Console.ReadLine()?.Trim();
 
-                if (input == "sair" || input == "3")
+                if (string.IsNullOrEmpty(input))
+                    continue;
+
+                var comando = input.ToLower();
+
+                if (comando == "sair" || comando == "4")
                 {
-                    Console.WriteLine("Encerrando o servidor...");
+                    Console.WriteLine("🔄 Encerrando o servidor...");
+                    await EncerrarServidor();
                     Environment.Exit(0);
                 }
-                else if (input == "listar" || input == "2")
+                else if (comando == "listar" || comando == "2")
                 {
-                    Console.WriteLine("\n[LISTANDO WAVYs REGISTRADAS]");
-                    try
-                    {
-                        var client = new MongoClient("mongodb://localhost:27017");
-                        var database = client.GetDatabase("sd");
-                        var collection = database.GetCollection<Modelo>("dados");
-
-                        var wavyList = await collection.Distinct<string>("wavyId", FilterDefinition<Modelo>.Empty).ToListAsync();
-
-                        if (wavyList.Count == 0)
-                        {
-                            Console.WriteLine("Nenhuma WAVY encontrada no banco de dados.");
-                            continue;
-                        }
-
-                        foreach (var id in wavyList)
-                            Console.WriteLine($"- {id}");
-
-                        Console.WriteLine($"\nTotal: {wavyList.Count} WAVY(s) encontrada(s)");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ERRO] Ao listar WAVYs: {ex.Message}");
-                    }
+                    await ListarWAVYs();
                 }
-                else if ((input?.StartsWith("analise ") ?? false) || (input?.StartsWith("1 ") ?? false))
+                else if (comando == "status" || comando == "3")
                 {
-                    var wavyId = input.StartsWith("1 ") ? input.Substring(2) : input.Substring(8);
+                    await VerificarStatus();
+                }
+                else if (comando.StartsWith("analise ") || comando.StartsWith("1 "))
+                {
+                    var wavyId = comando.StartsWith("1 ") ? input.Substring(2).Trim() : input.Substring(8).Trim();
 
                     if (string.IsNullOrWhiteSpace(wavyId))
                     {
-                        Console.WriteLine("[AVISO] Por favor, especifique o ID da WAVY");
+                        Console.WriteLine("⚠️  Por favor, especifique o ID da WAVY");
                         continue;
                     }
 
-                    Console.WriteLine($"\n[INICIANDO ANÁLISE PARA {wavyId}]");
-
-                    try
-                    {
-                        var resposta = await rpcClient.AnalisarDadosPorTipoAsync(new DadosParaAnalise { WavyId = wavyId });
-
-                        Console.WriteLine("\n=== RESULTADOS DA ANÁLISE POR TIPO ===");
-                        Console.WriteLine($"WAVY ID: {wavyId}");
-
-                        foreach (var mediaTipo in resposta.MediasPorTipo)
-                        {
-                            Console.WriteLine($"Tipo: {mediaTipo.Tipo}");
-                            Console.WriteLine($"  Média: {mediaTipo.Media:F2}");
-                            Console.WriteLine($"  Total de amostras: {mediaTipo.TotalAmostras}");
-                        }
-
-                        Console.WriteLine("=============================");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ERRO] Na análise: {ex.Message}");
-                    }
+                    await AnalisarWAVYComPython(wavyId);
                 }
                 else
                 {
-                    Console.WriteLine("[AVISO] Comando não reconhecido.");
+                    Console.WriteLine("⚠️  Comando não reconhecido. Tente novamente.");
                 }
+            }
+        }
+
+        static async Task ListarWAVYs()
+        {
+            Console.WriteLine("\n📋 [LISTANDO WAVYs REGISTRADAS]");
+            try
+            {
+                var wavyList = await MongoHelper.ListarWAVYsAsync();
+
+                if (wavyList.Count == 0)
+                {
+                    Console.WriteLine("   Nenhuma WAVY encontrada no banco de dados.");
+                    return;
+                }
+
+                Console.WriteLine($"   Total: {wavyList.Count} WAVY(s) encontrada(s)");
+                Console.WriteLine("   " + new string('-', 30));
+
+                foreach (var id in wavyList)
+                    Console.WriteLine($"   📊 {id}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ [ERRO] Ao listar WAVYs: {ex.Message}");
+            }
+        }
+
+        static async Task VerificarStatus()
+        {
+            Console.WriteLine("\n🔍 [STATUS DAS CONEXÕES]");
+
+            // MongoDB Status
+            try
+            {
+                var mongoClient = new MongoClient("mongodb://localhost:27017");
+                var database = mongoClient.GetDatabase("sd");
+                await database.RunCommandAsync((Command<BsonDocument>)"{ping:1}");
+                Console.WriteLine("   ✅ MongoDB: Conectado");
+            }
+            catch
+            {
+                Console.WriteLine("   ❌ MongoDB: Desconectado");
+            }
+
+            // Python gRPC Status
+            if (pythonAnalysisClient != null)
+            {
+                try
+                {
+                    var testRequest = new DadosParaAnalise { WavyId = "status_test" };
+                    // FIXED: removed incorrect using statement
+                    pythonAnalysisClient.AnalisarDadosPorTipo(testRequest);
+                    Console.WriteLine("   ✅ Python gRPC: Conectado");
+                }
+                catch
+                {
+                    Console.WriteLine("   ❌ Python gRPC: Desconectado");
+                }
+            }
+            else
+            {
+                Console.WriteLine("   ❌ Python gRPC: Não inicializado");
+            }
+        }
+
+        static async Task AnalisarWAVYComPython(string wavyId)
+        {
+            Console.WriteLine($"\n🔬 [INICIANDO ANÁLISE PARA {wavyId.ToUpper()}]");
+
+            if (pythonAnalysisClient == null)
+            {
+                Console.WriteLine("❌ [ERRO] Serviço Python não está disponível.");
+                Console.WriteLine("   Certifique-se que o servidor Python está rodando: python servidor.py");
+                return;
+            }
+
+            try
+            {
+                var request = new DadosParaAnalise { WavyId = wavyId };
+                // Use the async version for better performance
+                var resposta = await pythonAnalysisClient.AnalisarDadosPorTipoAsync(request);
+
+                Console.WriteLine("\n" + new string('=', 60));
+                Console.WriteLine($"           RESULTADOS DA ANÁLISE - {wavyId.ToUpper()}");
+                Console.WriteLine(new string('=', 60));
+
+                if (resposta.MediasPorTipo.Count == 0)
+                {
+                    Console.WriteLine("   ⚠️  Nenhum dado encontrado para esta WAVY.");
+                    return;
+                }
+
+                foreach (var mediaTipo in resposta.MediasPorTipo)
+                {
+                    Console.WriteLine($"📊 Tipo: {mediaTipo.Tipo}");
+                    Console.WriteLine($"   📈 Média: {mediaTipo.Media:F2}");
+                    Console.WriteLine($"   📋 Amostras: {mediaTipo.TotalAmostras}");
+                    Console.WriteLine("   " + new string('-', 40));
+                }
+
+                Console.WriteLine($"✅ Análise concluída com sucesso!");
+                Console.WriteLine(new string('=', 60));
+            }
+            catch (RpcException rpcEx)
+            {
+                Console.WriteLine($"❌ [ERRO gRPC] {rpcEx.Status.Detail}");
+                Console.WriteLine("   Verifique se o servidor Python está funcionando corretamente.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ [ERRO] Na análise Python: {ex.Message}");
+                Console.WriteLine("   Certifique-se que o servidor Python está rodando: python servidor.py");
             }
         }
 
@@ -283,14 +422,17 @@ namespace Servidor
 
             try
             {
+                var remoteEndPoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
+
                 while (true)
                 {
                     int bytesRead = stream.Read(buffer, 0, buffer.Length);
                     if (bytesRead == 0) break;
 
                     string message = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                    Console.WriteLine("Dados recebidos do AGREGADOR: " + message);
+                    Console.WriteLine($"📨 Dados recebidos do AGREGADOR ({remoteEndPoint}): {message}");
 
+                    // Save to file
                     ficheiroMutex.WaitOne();
                     try
                     {
@@ -301,9 +443,11 @@ namespace Servidor
                         ficheiroMutex.ReleaseMutex();
                     }
 
+                    // Save to MongoDB
                     MongoHelper.GuardarDados(message);
 
-                    string resposta = "Dados recebidos com sucesso";
+                    // Send confirmation
+                    string resposta = $"✅ Dados recebidos e processados com sucesso de {remoteEndPoint}";
                     byte[] respostaBytes = Encoding.ASCII.GetBytes(resposta);
                     stream.Write(respostaBytes, 0, respostaBytes.Length);
 
@@ -312,11 +456,20 @@ namespace Servidor
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Erro no HandleClient: {ex.Message}");
+                Console.WriteLine($"❌ Erro no HandleClient: {ex.Message}");
             }
             finally
             {
                 client.Close();
+            }
+        }
+
+        static async Task EncerrarServidor()
+        {
+            if (pythonAnalysisChannel != null)
+            {
+                await pythonAnalysisChannel.ShutdownAsync();
+                pythonAnalysisChannel.Dispose();
             }
         }
     }

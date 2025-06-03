@@ -1,13 +1,8 @@
 syntax = "proto3";
 
-option csharp_namespace = "AnaliseRpc";
-
 package analise;
 
-service Analise {
-  rpc AnalisarDados (DadosParaAnalise) returns (ResultadoAnalise);
-  rpc AnalisarDadosPorTipo (DadosParaAnalise) returns (ResultadoAnalisePorTipo);
-}
+option csharp_namespace = "AnaliseRpc";
 
 message DadosParaAnalise {
   string wavy_id = 1;
@@ -30,4 +25,9 @@ message TipoMedia {
 
 message ResultadoAnalisePorTipo {
   repeated TipoMedia medias_por_tipo = 1;
+}
+
+service Analise {
+  rpc AnalisarDados(DadosParaAnalise) returns (ResultadoAnalise);
+  rpc AnalisarDadosPorTipo(DadosParaAnalise) returns (ResultadoAnalisePorTipo);
 }

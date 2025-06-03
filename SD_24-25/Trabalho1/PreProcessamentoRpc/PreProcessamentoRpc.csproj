@@ -16,7 +16,7 @@
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
 		<PackageReference Include="RabbitMQ.Client" Version="6.4.0" />
-		<Protobuf Include="Protos/preprocessamento.proto" GrpcServices="Server" />
+		<Protobuf Include="Protos\preprocessamento.proto" GrpcServices="Server" />
 	</ItemGroup>
-	
+
 </Project>
