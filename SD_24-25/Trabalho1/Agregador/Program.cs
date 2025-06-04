@@ -74,12 +74,12 @@ namespace Agregador
             {
                 Console.WriteLine($"[AGREGADOR {kvp.Key}] Tipos: {string.Join(", ", kvp.Value)}");
             }
-
+            
             Console.WriteLine("\n=== CONFIGURAÇÃO PADRÃO PARA TODOS OS WAVYs ===");
             Console.WriteLine($"[DEFAULT] Pré-processamento: {configuracaoSistema.ConfiguracaoPadrao.PreProcessamento}");
             Console.WriteLine($"[DEFAULT] Volume de dados: {configuracaoSistema.ConfiguracaoPadrao.VolumeDados}");
             Console.WriteLine($"[DEFAULT] Servidor: {configuracaoSistema.ConfiguracaoPadrao.Servidor}");
-
+            
             if (configuracaoSistema.ConfiguracoesEspecificas.Count > 0)
             {
                 Console.WriteLine($"[DEFAULT] Configurações específicas: {configuracaoSistema.ConfiguracoesEspecificas.Count} WAVYs");
@@ -101,7 +101,7 @@ namespace Agregador
 
             // Start multiple aggregators
             List<Task> tasks = new();
-
+            
             for (int i = 1; i <= 2; i++)
             {
                 int agregadorId = i;
@@ -396,7 +396,7 @@ namespace Agregador
             int sucessos = 0;
             string identificador = string.IsNullOrEmpty(tipoMensagem) ? wavyId : $"{wavyId} ({tipoMensagem})";
 
-            Console.WriteLine($"[AGREGADOR {agregadorId}] Enviando {mensagens.Count} mensagens de {identificador} para {config.Servidor}:6000");
+            Console.WriteLine($"Enviando {mensagens.Count} mensagens de {identificador} para {config.Servidor}:6000");
 
             foreach (var mensagem in mensagens)
             {

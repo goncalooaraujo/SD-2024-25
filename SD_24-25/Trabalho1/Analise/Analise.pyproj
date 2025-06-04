@@ -5,12 +5,14 @@
     <ProjectGuid>f23aa205-e23a-49c2-969c-6c7c3aeb096f</ProjectGuid>
     <ProjectHome>.</ProjectHome>
     <StartupFile>servidor.py</StartupFile>
-    <SearchPath>
-    </SearchPath>
+    <SearchPath>cmd.exe</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>Analise</Name>
     <RootNamespace>Analise</RootNamespace>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <CommandLineArguments>streamlit run app.py</CommandLineArguments>
+    <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>

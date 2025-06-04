@@ -56,44 +56,10 @@ with st.expander("📅 Filtrar por Data", expanded=False):
             help="Deixe vazio para não filtrar por data final (mínimo: 01/01/2000)"
         )
     
-    # Quick date range buttons
-    st.markdown("**Intervalos Rápidos:**")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if st.button("📅 Última Semana"):
-            date_end = date.today()
-            date_start = date.today().replace(day=date.today().day - 7)
-            st.rerun()
-    
-    with col2:
-        if st.button("📅 Último Mês"):
-            date_end = date.today()
-            if date.today().month == 1:
-                date_start = date.today().replace(year=date.today().year - 1, month=12)
-            else:
-                date_start = date.today().replace(month=date.today().month - 1)
-            st.rerun()
-    
-    with col3:
-        if st.button("📅 Último Ano"):
-            date_end = date.today()
-            date_start = date.today().replace(year=date.today().year - 1)
-            st.rerun()
-    
-    with col4:
-        if st.button("📅 Desde 2000"):
-            date_end = date.today()
-            date_start = date(2000, 1, 1)
-            st.rerun()
-    
     # Validate date range
     if date_start and date_end and date_start > date_end:
         st.error("❌ Data de início deve ser anterior à data de fim")
 
-# Search info
-if search_value:
-    st.info(f"🔍 Buscando por: **{search_value}** em WAVY IDs e Tipos de sensor")
 
 if st.button("🔍 Analisar", type="primary"):
     if not search_value.strip():
